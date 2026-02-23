@@ -95,6 +95,7 @@ def _format_prompt(model_id: str, tokenizer, prompt: str) -> str:
 
 def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict:
     model, tokenizer = get_model(model_id)
+    device = next(model.parameters()).device
 
     formatted = _format_prompt(model_id, tokenizer, prompt)
     inputs = tokenizer(formatted, return_tensors="pt").to(device)

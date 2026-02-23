@@ -195,7 +195,7 @@ def get_gradient_attribution(request: ExplainRequest):
         
         # Slice to only user prompt tokens
         tokens = all_tokens[user_start:input_len]
-        target_id = full_ids["input_ids"][0][input_len].item() if full_ids["input_ids"].shape[1] > input_len else 0
+        target_id = full_ids["input_ids"][0, input_len].item() if full_ids["input_ids"].shape[1] > input_len else 0
         model.zero_grad()
         embed = model.get_input_embeddings()(inputs["input_ids"]).detach().requires_grad_(True)
         with torch.enable_grad():

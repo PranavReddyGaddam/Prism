@@ -73,30 +73,18 @@ def get_attention(request: ExplainRequest):
     try:
         model, tokenizer = get_model(request.model_id)
         device = next(model.parameters()).device
-        formatted = _format_prompt(request.model_id, tokenizer, request.prompt)
-        inputs = tokenizer(formatted, return_tensors="pt").to(device)
-        all_tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
-
-        # Find where the user prompt starts so we skip the system prefix
-        user_ids = tokenizer(request.prompt, return_tensors="pt")["input_ids"][0]
-        full_ids = inputs["input_ids"][0]
-        user_start = 0
-        for i in range(len(full_ids) - len(user_ids) + 1):
-            if full_ids[i:i+len(user_ids)].tolist() == user_ids.tolist():
-                user_start = i
-                break
+        
+        # Tokenize just the user prompt
+        user_inputs = tokenizer(request.prompt, return_tensors="pt").to(device)
+        user_tokens = tokenizer.convert_ids_to_tokens(user_inputs["input_ids"][0])
 
         with torch.no_grad():
-            out = model(**inputs, output_attentions=True)
+            out = model(**user_inputs, output_attentions=True)
         layer_attn = out.attentions[request.attn_layer][0, request.attn_head]
 
-        # Slice to only user prompt tokens
-        tokens = all_tokens[user_start:]
-        matrix = layer_attn.float()[user_start:, user_start:].tolist()
-
         return AttentionData(
-            tokens=tokens,
-            matrix=_safe_matrix(matrix),
+            tokens=user_tokens,
+            matrix=_safe_matrix(layer_attn.float().tolist()),
             layer=request.attn_layer,
             head=request.attn_head,
         )

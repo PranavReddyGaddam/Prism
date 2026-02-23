@@ -26,14 +26,14 @@ MODEL_CONFIGS = {
         ),
         "dtype": torch.float16,
     },
-    # "deepseek": {
-    #     "base_path": _model_path(
-    #         "deepseek-model",
-    #         "/Users/pranav/Projects/Major Project/deepseek-model",
-    #     ),
-    #     "adapter_path": None,
-    #     "dtype": torch.bfloat16,
-    # },
+    "deepseek": {
+        "base_path": _model_path(
+            "deepseek-model",
+            "/Users/pranav/Projects/Major Project/deepseek-model",
+        ),
+        "adapter_path": None,
+        "dtype": torch.bfloat16,
+    },
 }
 
 _model_cache: dict = {}

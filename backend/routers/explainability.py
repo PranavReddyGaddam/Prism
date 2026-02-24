@@ -122,21 +122,45 @@ def get_logit_lens(request: ExplainRequest):
     try:
         model, tokenizer = get_model(request.model_id)
         device = next(model.parameters()).device
-        formatted = _format_prompt(request.model_id, tokenizer, request.prompt)
-        inputs = tokenizer(formatted, return_tensors="pt").to(device)
-        with torch.no_grad():
-            out = model(**inputs, output_hidden_states=True)
-        lm_head = model.lm_head if hasattr(model, "lm_head") else model.base_model.lm_head
+        response_text = request.response if request.response else run_inference(request.model_id, request.prompt, request.max_new_tokens)["response"]
+        
+        # Get response tokens
+        response_ids = tokenizer(response_text, return_tensors="pt")["input_ids"][0]
+        
+        # Sample every 5th word (including first word)
+        sampled_positions = list(range(0, len(response_ids), 5))
+        
         logit_lens = []
-        for i, hs in enumerate(out.hidden_states):
-            last_hidden = hs[0, -1, :].unsqueeze(0)
+        for pos in sampled_positions:
+            # Get prefix up to this position
+            prefix_text = tokenizer.decode(response_ids[:pos]) if pos > 0 else ""
+            full_input = request.prompt + prefix_text
+            
+            # Get model outputs for this position
+            inputs = tokenizer(_format_prompt(request.model_id, tokenizer, full_input), return_tensors="pt").to(device)
             with torch.no_grad():
-                layer_logits = lm_head(last_hidden).float()
-            layer_probs = torch.softmax(layer_logits, dim=-1)
-            top_id = layer_probs.argmax(dim=-1).item()
-            top_prob = layer_probs[0, top_id].item()
-            top_token = tokenizer.decode([top_id])
-            logit_lens.append({"layer": i, "predicted_token": top_token, "probability": _safe_float(float(top_prob))})
+                out = model(**inputs, output_hidden_states=True)
+            
+            lm_head = model.lm_head if hasattr(model, 'lm_head') else model.base_model.lm_head
+            
+            for layer_idx, hs in enumerate(out.hidden_states):
+                last_hidden = hs[0, -1, :].unsqueeze(0)
+                with torch.no_grad():
+                    layer_logits = lm_head(last_hidden).float()
+                layer_probs = torch.softmax(layer_logits, dim=-1)
+                
+                # Get actual token at this position
+                actual_token_id = response_ids[pos] if pos < len(response_ids) else response_ids[-1]
+                actual_token = tokenizer.decode([actual_token_id])
+                actual_prob = layer_probs[0, actual_token_id].item()
+                
+                logit_lens.append({
+                    "layer": layer_idx, 
+                    "word_position": pos,
+                    "predicted_token": actual_token,
+                    "probability": _safe_float(float(actual_prob))
+                })
+        
         return {"logit_lens": logit_lens}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

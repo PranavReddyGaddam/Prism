@@ -3,7 +3,7 @@ import AiPrompt from '@/components/kokonutui/ai-prompt'
 import Silk from '@/components/Silk'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = 'https://chester-holmes-varying-descriptions.trycloudflare.com'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ interface AttentionData {
 
 interface LogitLensLayer {
   layer: number
+  word_position?: number
   predicted_token: string
   probability: number
 }
@@ -104,7 +105,8 @@ function AttentionViz({ data }: { data: AttentionData }) {
   const MAX_TOKENS = 20
   const tokens = data.tokens.slice(0, MAX_TOKENS).map(cleanToken)
   const matrix = data.matrix.slice(0, MAX_TOKENS).map(r => r.slice(0, MAX_TOKENS))
-  const maxVal = Math.max(...matrix.flat(), 0.001)
+  // Use a more sensitive scaling for attention weights
+  const maxVal = Math.max(...matrix.flat(), 0.1)
   return (
     <div className="overflow-x-auto">
       <p className="text-gray-500 text-xs mb-3">Layer {data.layer} · Head {data.head} · showing first {tokens.length} tokens</p>
@@ -139,22 +141,57 @@ function AttentionViz({ data }: { data: AttentionData }) {
 
 function LogitLensViz({ data }: { data: LogitLensLayer[] }) {
   if (!data.length) return <p className="text-gray-500 text-sm">No logit lens data.</p>
-  const maxProb = Math.max(...data.map(d => d.probability), 0.001)
+  
+  // Group data by word position
+  const groupedByPosition = data.reduce((acc, item) => {
+    const pos = item.word_position || 0
+    if (!acc[pos]) acc[pos] = []
+    acc[pos].push(item)
+    return acc
+  }, {} as Record<number, LogitLensLayer[]>)
+  
+  const positions = Object.keys(groupedByPosition).map(Number).sort()
+  
   return (
-    <div className="space-y-1">
-      <p className="text-gray-500 text-xs mb-3">Top predicted token at each transformer layer</p>
-      {data.map((d) => (
-        <div key={d.layer} className="flex items-center gap-3">
-          <span className="text-gray-500 text-[10px] w-12 text-right shrink-0">L{d.layer}</span>
-          <div className="flex-1 bg-gray-900 rounded-sm h-5 relative overflow-hidden">
-            <div className="h-full rounded-sm" style={{ width: `${(d.probability / maxProb) * 100}%`, backgroundColor: '#8b5cf6' }} />
-            <span className="absolute inset-0 flex items-center px-2 text-[10px] text-white font-mono truncate">
-              {cleanToken(d.predicted_token)}
-            </span>
+    <div className="space-y-6">
+      <p className="text-gray-500 text-xs mb-3">Every 5th word - layer-by-layer prediction confidence</p>
+      
+      {positions.map((pos) => {
+        const posData = groupedByPosition[pos]
+        const word = posData[0]?.predicted_token || ''
+        
+        // Use a better scaling that handles extreme probabilities
+        const scaledData = posData.map(d => ({
+          ...d,
+          scaledProb: Math.pow(d.probability, 0.3) * 100 // Power law scaling for better contrast
+        }))
+        const maxScaled = Math.max(...scaledData.map(d => d.scaledProb), 1)
+        
+        return (
+          <div key={pos} className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-white text-xs font-semibold">Word {pos + 1}:</span>
+              <span className="text-purple-400 text-xs font-mono bg-gray-800 px-2 py-1 rounded">
+                {cleanToken(word)}
+              </span>
+            </div>
+            <div className="space-y-1 ml-4">
+              {scaledData.map((d) => (
+                <div key={`${d.layer}-${pos}`} className="flex items-center gap-3">
+                  <span className="text-gray-500 text-[10px] w-12 text-right shrink-0">L{d.layer}</span>
+                  <div className="flex-1 bg-gray-900 rounded-sm h-4 relative overflow-hidden">
+                    <div className="h-full rounded-sm" style={{ width: `${Math.min(100, (d.scaledProb / maxScaled) * 100)}%`, backgroundColor: '#8b5cf6' }} />
+                    <span className="absolute inset-0 flex items-center px-2 text-[9px] text-white font-mono truncate">
+                      {cleanToken(d.predicted_token)}
+                    </span>
+                  </div>
+                  <span className="text-gray-500 text-[9px] w-10 shrink-0">{(d.probability * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <span className="text-gray-500 text-[10px] w-10 shrink-0">{(d.probability * 100).toFixed(1)}%</span>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -218,12 +255,36 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [explainLoading, setExplainLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [attentionLayer, setAttentionLayer] = useState(0)
+  const [attentionHead, setAttentionHead] = useState(0)
+  const [currentPrompt, setCurrentPrompt] = useState('')
+
+  const fetchAttentionForLayer = async (prompt: string, response: string) => {
+    const modelId = result?.response ? (result.thinking ? 'deepseek' : 'phi3') : 'phi3'
+    const explainBase = { model_id: modelId, prompt, response, max_new_tokens: 64 }
+    
+    try {
+      const res = await fetch(`${API_BASE}/explain/attention`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...explainBase, attn_layer: attentionLayer, attn_head: attentionHead })
+      })
+      
+      if (res.ok) {
+        const data = await res.json()
+        setExplainData(prev => ({ ...prev, attention: data }))
+      }
+    } catch (err) {
+      console.error('Failed to fetch attention:', err)
+    }
+  }
 
   const handleSubmit = async (prompt: string, model: string) => {
     setIsLoading(true)
     setResult(null)
     setExplainData({})
     setError(null)
+    setCurrentPrompt(prompt)
 
     const modelId = model === 'DeepSeek' ? 'deepseek' : 'phi3'
 
@@ -253,7 +314,7 @@ function App() {
 
       const [confRes, attnRes, logitRes, hiddenRes] = await Promise.allSettled([
         fetch(`${API_BASE}/explain/confidence`, { method: 'POST', headers, body }),
-        fetch(`${API_BASE}/explain/attention`, { method: 'POST', headers, body: JSON.stringify({ ...explainBase, attn_layer: 0, attn_head: 0 }) }),
+        fetch(`${API_BASE}/explain/attention`, { method: 'POST', headers, body: JSON.stringify({ ...explainBase, attn_layer: attentionLayer, attn_head: attentionHead }) }),
         fetch(`${API_BASE}/explain/logit-lens`, { method: 'POST', headers, body }),
         fetch(`${API_BASE}/explain/hidden-states`, { method: 'POST', headers, body }),
       ])
@@ -372,7 +433,46 @@ function App() {
                 {/* Attention Patterns */}
                 <div className="p-6 min-h-screen border-b border-gray-800">
                   <h2 className="text-white text-lg font-semibold mb-1">Attention Patterns</h2>
-                  <p className="text-gray-500 text-xs mb-4">Layer 0, Head 0 attention weights</p>
+                  <p className="text-gray-500 text-xs mb-4">Layer {attentionLayer}, Head {attentionHead} attention weights</p>
+                  
+                  {/* Layer and Head Controls */}
+                  {result && (
+                    <div className="space-y-3 mb-4">
+                      <div className="flex items-center gap-4">
+                        <label className="text-gray-400 text-xs w-12">Layer:</label>
+                        <input 
+                          type="range"
+                          min="0"
+                          max="31"
+                          value={attentionLayer}
+                          onChange={(e) => {
+                            const newLayer = Number(e.target.value)
+                            setAttentionLayer(newLayer)
+                            fetchAttentionForLayer(currentPrompt, result.response)
+                          }}
+                          className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                        />
+                        <span className="text-white text-xs w-8 text-right">{attentionLayer}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <label className="text-gray-400 text-xs w-12">Head:</label>
+                        <input 
+                          type="range"
+                          min="0"
+                          max="31"
+                          value={attentionHead}
+                          onChange={(e) => {
+                            const newHead = Number(e.target.value)
+                            setAttentionHead(newHead)
+                            fetchAttentionForLayer(currentPrompt, result.response)
+                          }}
+                          className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                        />
+                        <span className="text-white text-xs w-8 text-right">{attentionHead}</span>
+                      </div>
+                    </div>
+                  )}
+
                   {explainLoading && !explainData.attention
                     ? <LoadingSection label="attention" />
                     : explainData.attention

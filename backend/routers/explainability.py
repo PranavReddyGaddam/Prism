@@ -168,22 +168,22 @@ def get_gradient_attribution(request: ExplainRequest):
         response_text = request.response if request.response else run_inference(request.model_id, request.prompt, request.max_new_tokens)["response"]
         formatted = _format_prompt(request.model_id, tokenizer, request.prompt)
         inputs = tokenizer(formatted, return_tensors="pt").to(device)
-        full_ids = tokenizer(formatted + response_text, return_tensors="pt").to(device)
+        full_inputs = tokenizer(formatted + response_text, return_tensors="pt").to(device)
         input_len = inputs["input_ids"].shape[1]
         all_tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
         
         # Find where the user prompt starts so we skip the system prefix
         user_ids = tokenizer(request.prompt, return_tensors="pt")["input_ids"][0]
-        full_ids = inputs["input_ids"][0]
+        full_ids_tensor = inputs["input_ids"][0]
         user_start = 0
-        for i in range(len(full_ids) - len(user_ids) + 1):
-            if full_ids[i:i+len(user_ids)].tolist() == user_ids.tolist():
+        for i in range(len(full_ids_tensor) - len(user_ids) + 1):
+            if full_ids_tensor[i:i+len(user_ids)].tolist() == user_ids.tolist():
                 user_start = i
                 break
         
         # Slice to only user prompt tokens
         tokens = all_tokens[user_start:input_len]
-        target_id = full_ids["input_ids"][0, input_len].item() if full_ids["input_ids"].shape[1] > input_len else 0
+        target_id = full_inputs["input_ids"][0, input_len].item() if full_inputs["input_ids"].shape[1] > input_len else 0
         model.zero_grad()
         embed = model.get_input_embeddings()(inputs["input_ids"]).detach().requires_grad_(True)
         with torch.enable_grad():

@@ -49,7 +49,7 @@ def get_model(model_id: str):
     config = MODEL_CONFIGS[model_id]
     dtype = config["dtype"]
 
-    tokenizer = AutoTokenizer.from_pretrained(config["base_path"])
+    tokenizer = AutoTokenizer.from_pretrained(config["base_path"], trust_remote_code=True)
 
     model = AutoModelForCausalLM.from_pretrained(
         config["base_path"],
@@ -57,6 +57,7 @@ def get_model(model_id: str):
         device_map="auto",  # Will use GPU if available, otherwise CPU
         low_cpu_mem_usage=True,
         attn_implementation="eager",
+        trust_remote_code=True,
     )
 
     # Detect device for tensor operations

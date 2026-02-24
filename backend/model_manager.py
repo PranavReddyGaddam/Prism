@@ -58,6 +58,7 @@ def get_model(model_id: str):
         low_cpu_mem_usage=True,
         attn_implementation="eager",
         trust_remote_code=True,
+        local_files_only=True,  # Force use of local files, not HuggingFace hub
     )
 
     # Detect device for tensor operations

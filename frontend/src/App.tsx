@@ -3,7 +3,7 @@ import AiPrompt from '@/components/kokonutui/ai-prompt'
 import Silk from '@/components/Silk'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const API_BASE = 'https://chester-holmes-varying-descriptions.trycloudflare.com'
+const API_BASE = 'https://integrate-commission-surgeons-conceptual.trycloudflare.com'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -151,47 +151,58 @@ function LogitLensViz({ data }: { data: LogitLensLayer[] }) {
   }, {} as Record<number, LogitLensLayer[]>)
   
   const positions = Object.keys(groupedByPosition).map(Number).sort()
+  const [selectedWordIndex, setSelectedWordIndex] = React.useState(0)
+  
+  const selectedPos = positions[selectedWordIndex]
+  const selectedData = groupedByPosition[selectedPos] || []
+  const selectedWord = selectedData[0]?.predicted_token || ''
+  
+  // Use a better scaling that handles extreme probabilities
+  const scaledData = selectedData.map(d => ({
+    ...d,
+    scaledProb: Math.pow(d.probability, 0.3) * 100 // Power law scaling for better contrast
+  }))
+  const maxScaled = Math.max(...scaledData.map(d => d.scaledProb), 1)
   
   return (
-    <div className="space-y-6">
-      <p className="text-gray-500 text-xs mb-3">Every 5th word - layer-by-layer prediction confidence</p>
+    <div className="space-y-4">
+      <p className="text-gray-500 text-xs mb-3">Select a word to see its layer-by-layer prediction confidence</p>
       
-      {positions.map((pos) => {
-        const posData = groupedByPosition[pos]
-        const word = posData[0]?.predicted_token || ''
-        
-        // Use a better scaling that handles extreme probabilities
-        const scaledData = posData.map(d => ({
-          ...d,
-          scaledProb: Math.pow(d.probability, 0.3) * 100 // Power law scaling for better contrast
-        }))
-        const maxScaled = Math.max(...scaledData.map(d => d.scaledProb), 1)
-        
-        return (
-          <div key={pos} className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-white text-xs font-semibold">Word {pos + 1}:</span>
-              <span className="text-purple-400 text-xs font-mono bg-gray-800 px-2 py-1 rounded">
-                {cleanToken(word)}
+      {/* Word Selector */}
+      <div className="flex items-center gap-4">
+        <label className="text-gray-400 text-xs w-16">Word:</label>
+        <select 
+          value={selectedWordIndex}
+          onChange={(e) => setSelectedWordIndex(Number(e.target.value))}
+          className="bg-gray-800 text-white text-xs px-3 py-1 rounded border border-gray-700 flex-1"
+        >
+          {positions.map((pos, index) => (
+            <option key={pos} value={index}>
+              Word {pos + 1}: {cleanToken(groupedByPosition[pos][0]?.predicted_token || '')}
+            </option>
+          ))}
+        </select>
+        <div className="bg-gray-800 px-3 py-1 rounded border border-gray-700">
+          <span className="text-purple-400 text-xs font-mono">{cleanToken(selectedWord)}</span>
+        </div>
+      </div>
+      
+      {/* Layer-by-layer visualization for selected word */}
+      <div className="space-y-1">
+        <p className="text-gray-500 text-[10px] mb-2">Layer confidence for word "{cleanToken(selectedWord)}"</p>
+        {scaledData.map((d) => (
+          <div key={d.layer} className="flex items-center gap-3">
+            <span className="text-gray-500 text-[10px] w-12 text-right shrink-0">L{d.layer}</span>
+            <div className="flex-1 bg-gray-900 rounded-sm h-4 relative overflow-hidden">
+              <div className="h-full rounded-sm" style={{ width: `${Math.min(100, (d.scaledProb / maxScaled) * 100)}%`, backgroundColor: '#8b5cf6' }} />
+              <span className="absolute inset-0 flex items-center px-2 text-[9px] text-white font-mono truncate">
+                {cleanToken(d.predicted_token)}
               </span>
             </div>
-            <div className="space-y-1 ml-4">
-              {scaledData.map((d) => (
-                <div key={`${d.layer}-${pos}`} className="flex items-center gap-3">
-                  <span className="text-gray-500 text-[10px] w-12 text-right shrink-0">L{d.layer}</span>
-                  <div className="flex-1 bg-gray-900 rounded-sm h-4 relative overflow-hidden">
-                    <div className="h-full rounded-sm" style={{ width: `${Math.min(100, (d.scaledProb / maxScaled) * 100)}%`, backgroundColor: '#8b5cf6' }} />
-                    <span className="absolute inset-0 flex items-center px-2 text-[9px] text-white font-mono truncate">
-                      {cleanToken(d.predicted_token)}
-                    </span>
-                  </div>
-                  <span className="text-gray-500 text-[9px] w-10 shrink-0">{(d.probability * 100).toFixed(1)}%</span>
-                </div>
-              ))}
-            </div>
+            <span className="text-gray-500 text-[9px] w-10 shrink-0">{(d.probability * 100).toFixed(1)}%</span>
           </div>
-        )
-      })}
+        ))}
+      </div>
     </div>
   )
 }
@@ -279,14 +290,15 @@ function App() {
     }
   }
 
-  const handleSubmit = async (prompt: string, model: string) => {
+  const handleSubmit = async (prompt: string, _model: string) => {
     setIsLoading(true)
     setResult(null)
     setExplainData({})
     setError(null)
     setCurrentPrompt(prompt)
 
-    const modelId = model === 'DeepSeek' ? 'deepseek' : 'phi3'
+    // Temporarily map both models to deepseek since phi3 is not working
+    const modelId = 'deepseek'
 
     setTimeout(() => {
       const section = document.getElementById('explanation-section')

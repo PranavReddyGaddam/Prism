@@ -16,14 +16,8 @@ def _model_path(cloud_name: str, local_fallback: str) -> str:
 
 MODEL_CONFIGS = {
     "phi3": {
-        "base_path": _model_path(
-            "phi-3-mini-4k-instruct",
-            "/Users/pranav/Projects/Major Project/phi-3-mini-4k-instruct",
-        ),
-        "adapter_path": _model_path(
-            "phi3_mmlu_fever_hotpot_lora_adapter",
-            "/Users/pranav/Projects/Major Project/phi3_mmlu_fever_hotpot_lora_adapter",
-        ),
+        "base_path": "microsoft/Phi-3-mini-4k-instruct",  # Use HuggingFace cache
+        "adapter_path": None,  # Disabled LoRA adapter
         "dtype": torch.float16,
     },
     "deepseek": {
@@ -67,11 +61,12 @@ def get_model(model_id: str):
     if model_id == "phi3":
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        if config["adapter_path"]:
-            # The LoRA adapter was trained on vocab size 32012; resize before loading
-            model.resize_token_embeddings(32012)
-            model = PeftModel.from_pretrained(model, config["adapter_path"])
-            model = model.merge_and_unload()
+        # Temporarily disable LoRA adapter for local demo due to PEFT version issues
+        # if config["adapter_path"]:
+        #     # The LoRA adapter was trained on vocab size 32012; resize before loading
+        #     model.resize_token_embeddings(32012)
+        #     model = PeftModel.from_pretrained(model, config["adapter_path"])
+        #     model = model.merge_and_unload()
 
     model.eval()
     _model_cache[model_id] = (model, tokenizer)
@@ -111,6 +106,7 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
             repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
+            use_cache=False,
         )
 
     new_tokens = outputs[0][input_length:]

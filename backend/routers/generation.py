@@ -28,6 +28,9 @@ def generate(request: GenerationRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
+        error_detail = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        print(f"Generation error: {error_detail}")
         raise HTTPException(status_code=500, detail=str(e))
 
     return GenerationResponse(

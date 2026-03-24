@@ -14,6 +14,7 @@ build/
 phi-3-mini-4k-instruct/
 deepseek-model/
 phi3_mmlu_fever_hotpot_lora_adapter/
+transformer-explainer/
 
 # Environment
 .env

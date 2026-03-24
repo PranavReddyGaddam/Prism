@@ -1,0 +1,44 @@
+================================================
+Performance Benchmarking - 2026-03-23 21:56:20
+================================================
+
+
+Test 1: Base Model Inference
+----------------------------
+
+Test 2: Fine-tuned Model Inference
+-----------------------------------
+
+Test 3: Explainability - Token Confidence
+-----------------------------------------
+
+Test 4: Explainability - Attention Weights
+------------------------------------------
+
+Test 5: Explainability - Logit Lens
+-----------------------------------
+
+Test 6: Explainability - Attribution
+------------------------------------
+
+Test 7: Explainability - Hidden States
+--------------------------------------
+
+================================================
+PERFORMANCE SUMMARY
+================================================
+
+Function                       Target     Actual     Status    
+────────────────────────────────────────────────────────────────
+Inference time                 <10s       Testing Fine-tuned model inference... [0;32mOK[0m (30.073409s)
+30.073409s ❌       
+Logit Lens render              <5s        Testing Logit lens analysis... [0;32mOK[0m (1.093664s)
+1.093664s ❌       
+Attention extraction           <3s        Testing Attention weights extraction... [0;31mFAILED[0m
+0.395265s ❌       
+Attribution analysis           <5s        Testing Gradient attribution... [0;32mOK[0m (0.517265s)
+0.517265s ❌       
+
+Full results saved to: performance_results.txt
+
+Benchmark complete!

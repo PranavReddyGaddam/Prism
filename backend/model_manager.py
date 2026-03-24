@@ -1,146 +1,74 @@
 import os
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-
-# Base directory: prefer a sibling models/ folder (cloud), fall back to local dev paths
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_MODELS_DIR = os.path.join(_HERE, "..", "models")
-
-
-def _model_path(cloud_name: str, local_fallback: str) -> str:
-    """Return cloud path if it exists, otherwise local dev path."""
-    cloud = os.path.abspath(os.path.join(_MODELS_DIR, cloud_name))
-    return cloud if os.path.isdir(cloud) else local_fallback
 
 
 MODEL_CONFIGS = {
-    "phi3": {
-        "base_path": "microsoft/Phi-3-mini-4k-instruct",  # Use HuggingFace cache
-        "adapter_path": None,  # Disabled LoRA adapter
-        "dtype": torch.float16,
+    "gemma-base": {
+        "remote": True,
+        "endpoint": "base",
+        "description": "Gemma 3 4B Pretrained (google/gemma-3-4b-pt) via Colab ngrok tunnel",
+        "parameters": "4B",
+        "context_window": "128K",
+        "model_name": "google/gemma-3-4b-pt",
     },
-    "deepseek": {
-        "base_path": _model_path(
-            "deepseek-model",
-            "/Users/pranav/Projects/Major Project/deepseek-model",
-        ),
-        "adapter_path": None,
-        "dtype": torch.bfloat16,
+    "gemma-finetuned": {
+        "remote": True,
+        "endpoint": "finetuned",
+        "description": "Gemma 3 4B + LoRA (PRM math dataset) via Colab ngrok tunnel",
+        "parameters": "4B",
+        "context_window": "128K",
+        "model_name": "google/gemma-3-4b-pt",
+        "adapter": "LoRA (rank=16, alpha=32)",
     },
 }
 
-_model_cache: dict = {}
-
-
-def get_model(model_id: str):
-    if model_id not in MODEL_CONFIGS:
-        raise ValueError(f"Unknown model_id: {model_id}. Choose from {list(MODEL_CONFIGS.keys())}")
-
-    if model_id in _model_cache:
-        return _model_cache[model_id]
-
-    config = MODEL_CONFIGS[model_id]
-    dtype = config["dtype"]
-
-    tokenizer = AutoTokenizer.from_pretrained(config["base_path"], trust_remote_code=True)
-
-    model = AutoModelForCausalLM.from_pretrained(
-        config["base_path"],
-        torch_dtype=dtype,
-        device_map="auto",  # Will use GPU if available, otherwise CPU
-        low_cpu_mem_usage=True,
-        attn_implementation="eager",
-        trust_remote_code=True,
-        local_files_only=True,  # Force use of local files, not HuggingFace hub
-    )
-
-    # Detect device for tensor operations
-    device = next(model.parameters()).device
-
-    if model_id == "phi3":
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        # Temporarily disable LoRA adapter for local demo due to PEFT version issues
-        # if config["adapter_path"]:
-        #     # The LoRA adapter was trained on vocab size 32012; resize before loading
-        #     model.resize_token_embeddings(32012)
-        #     model = PeftModel.from_pretrained(model, config["adapter_path"])
-        #     model = model.merge_and_unload()
-
-    model.eval()
-    _model_cache[model_id] = (model, tokenizer)
-    return model, tokenizer
-
-
-def _format_prompt(model_id: str, tokenizer, prompt: str) -> str:
-    if model_id == "deepseek":
-        messages = [{"role": "user", "content": prompt}]
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-    else:
-        return (
-            "### System:\n"
-            "You are a helpful assistant. Explain step-by-step in detail, "
-            "then give the final answer. Follow the required format: Final: ...\n\n"
-            f"### User:\n{prompt}\n\n### Assistant:\n"
-        )
 
 
 def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict:
-    model, tokenizer = get_model(model_id)
-    device = next(model.parameters()).device
-
-    formatted = _format_prompt(model_id, tokenizer, prompt)
-    inputs = tokenizer(formatted, return_tensors="pt").to(device)
-    input_length = inputs["input_ids"].shape[1]
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            repetition_penalty=1.1,
-            pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            use_cache=False,
-        )
-
-    new_tokens = outputs[0][input_length:]
-    full_response = tokenizer.decode(new_tokens, skip_special_tokens=False)
-
-    eos = tokenizer.eos_token or "<｜end▁of▁sentence｜>"
-    full_response = full_response.replace(eos, "").strip()
-
-    for stop in ["### User:", "<｜User｜>", "<｜end▁of▁sentence｜>"]:
-        if stop in full_response:
-            full_response = full_response.split(stop)[0].strip()
-
+    """
+    Run inference on remote Gemma models via Colab ngrok tunnel.
+    
+    Args:
+        model_id: Either 'gemma-base' or 'gemma-finetuned'
+        prompt: The input prompt
+        max_new_tokens: Maximum tokens to generate (default 512)
+    
+    Returns:
+        Dict with response, thinking, final_answer, and token_count
+    """
+    if model_id not in MODEL_CONFIGS:
+        raise ValueError(f"Unknown model_id: {model_id}. Choose from {list(MODEL_CONFIGS.keys())}")
+    
+    # Import here to avoid circular dependency
+    import asyncio
+    from remote_model_client import get_base_gemma_response, get_finetuned_gemma_response
+    
+    # Call appropriate remote model endpoint
+    if model_id == "gemma-base":
+        result = asyncio.run(get_base_gemma_response(prompt, max_new_tokens))
+    elif model_id == "gemma-finetuned":
+        result = asyncio.run(get_finetuned_gemma_response(prompt, max_new_tokens))
+    else:
+        raise ValueError(f"Unknown model: {model_id}")
+    
+    # Parse response from remote model
+    full_response = result.get("response", "")
+    
+    # For Gemma models, extract thinking and final answer if present
     thinking = None
     final_answer = None
-
-    if model_id == "deepseek":
-        if "</think>" in full_response:
-            parts = full_response.split("</think>", 1)
-            thinking = parts[0].strip()
-            final_answer = parts[1].strip()
-        elif "<think>" in full_response:
-            thinking = full_response.split("<think>", 1)[1].strip()
-            final_answer = None
-        else:
-            final_answer = full_response.strip()
+    
+    # Gemma fine-tuned model uses step-by-step format
+    if "### Solution:" in full_response:
+        final_answer = full_response.split("### Solution:")[-1].strip()
     else:
-        if "Final:" in full_response:
-            final_answer = full_response.split("Final:")[-1].strip()
-        else:
-            final_answer = full_response.strip()
-
+        final_answer = full_response.strip()
+    
+    # Estimate token count (rough approximation: ~4 chars per token)
+    token_count = len(full_response) // 4
+    
     return {
         "response": full_response,
         "thinking": thinking,
         "final_answer": final_answer,
-        "token_count": len(new_tokens),
+        "token_count": token_count,
     }

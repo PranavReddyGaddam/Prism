@@ -1,13 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-from routers import generation, explainability, models
+# Load environment variables from .env file
+load_dotenv()
+
+from routers import generation, models, explainability_remote
 
 app = FastAPI(title="LLM Explainability API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -15,7 +19,7 @@ app.add_middleware(
 
 app.include_router(models.router, prefix="/models", tags=["models"])
 app.include_router(generation.router, prefix="/generate", tags=["generation"])
-app.include_router(explainability.router, prefix="/explain", tags=["explainability"])
+app.include_router(explainability_remote.router, prefix="/explain", tags=["explainability"])
 
 
 @app.get("/health")

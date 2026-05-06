@@ -213,6 +213,7 @@ export function ModelComparisonBento({ slot, onExpandCard }: ModelComparisonBent
                 <XAxis dataKey="layer" stroke="#9ca3af" fontSize={9} tickLine={false} interval="preserveStartEnd" />
                 <YAxis stroke="#9ca3af" fontSize={9} tickLine={false} width={40} />
                 <Tooltip
+                  cursor={false}
                   contentStyle={{
                     backgroundColor: '#1f2937',
                     border: '1px solid #374151',

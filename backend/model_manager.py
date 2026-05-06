@@ -1,74 +1,54 @@
 import os
 
-
 MODEL_CONFIGS = {
-    "gemma-base": {
-        "remote": True,
-        "endpoint": "base",
-        "description": "Gemma 3 4B Pretrained (google/gemma-3-4b-pt) via Colab ngrok tunnel",
-        "parameters": "4B",
-        "context_window": "128K",
-        "model_name": "google/gemma-3-4b-pt",
+    "qwen-2.5-math-7b": {
+        "description": "Qwen2.5-Math-7B — math reasoning",
+        "parameters": "7B",
+        "hf_repo": "Qwen/Qwen2.5-Math-7B",
+        "pod_dir": "qwen25-math-7b",
     },
-    "gemma-finetuned": {
-        "remote": True,
-        "endpoint": "finetuned",
-        "description": "Gemma 3 4B + LoRA (PRM math dataset) via Colab ngrok tunnel",
-        "parameters": "4B",
-        "context_window": "128K",
-        "model_name": "google/gemma-3-4b-pt",
-        "adapter": "LoRA (rank=16, alpha=32)",
+    "deepseek-math-7b": {
+        "description": "DeepSeek-Math-7B-Instruct — math instruction following",
+        "parameters": "7B",
+        "hf_repo": "deepseek-ai/deepseek-math-7b-instruct",
+        "pod_dir": "deepseek-math-7b",
+    },
+    "internlm2-math-7b": {
+        "description": "InternLM2-Math-Plus-7B — advanced math reasoning",
+        "parameters": "7B",
+        "hf_repo": "internlm/internlm2-math-plus-7b",
+        "pod_dir": "internlm2-math-plus-7b",
+    },
+    "wizardmath-7b": {
+        "description": "WizardMath-7B-V1.1 — math problem solving",
+        "parameters": "7B",
+        "hf_repo": "WizardLMTeam/WizardMath-7B-V1.1",
+        "pod_dir": "wizardmath-7b-v1.1",
     },
 }
 
 
-
 def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict:
-    """
-    Run inference on remote Gemma models via Colab ngrok tunnel.
-    
-    Args:
-        model_id: Either 'gemma-base' or 'gemma-finetuned'
-        prompt: The input prompt
-        max_new_tokens: Maximum tokens to generate (default 512)
-    
-    Returns:
-        Dict with response, thinking, final_answer, and token_count
-    """
     if model_id not in MODEL_CONFIGS:
-        raise ValueError(f"Unknown model_id: {model_id}. Choose from {list(MODEL_CONFIGS.keys())}")
-    
-    # Import here to avoid circular dependency
+        raise ValueError(
+            f"Unknown model_id: {model_id!r}. Valid: {list(MODEL_CONFIGS.keys())}"
+        )
+
     import asyncio
-    from remote_model_client import get_base_gemma_response, get_finetuned_gemma_response
-    
-    # Call appropriate remote model endpoint
-    if model_id == "gemma-base":
-        result = asyncio.run(get_base_gemma_response(prompt, max_new_tokens))
-    elif model_id == "gemma-finetuned":
-        result = asyncio.run(get_finetuned_gemma_response(prompt, max_new_tokens))
-    else:
-        raise ValueError(f"Unknown model: {model_id}")
-    
-    # Parse response from remote model
+    from remote_model_client import get_model_response
+
+    result = asyncio.run(get_model_response(model_id, prompt, max_new_tokens))
     full_response = result.get("response", "")
-    
-    # For Gemma models, extract thinking and final answer if present
-    thinking = None
-    final_answer = None
-    
-    # Gemma fine-tuned model uses step-by-step format
+
+    # Extract the answer portion if the model echoes the prompt header
     if "### Solution:" in full_response:
         final_answer = full_response.split("### Solution:")[-1].strip()
     else:
         final_answer = full_response.strip()
-    
-    # Estimate token count (rough approximation: ~4 chars per token)
-    token_count = len(full_response) // 4
-    
+
     return {
         "response": full_response,
-        "thinking": thinking,
+        "thinking": None,
         "final_answer": final_answer,
-        "token_count": token_count,
+        "token_count": len(full_response) // 4,
     }

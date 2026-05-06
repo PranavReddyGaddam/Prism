@@ -1,6 +1,5 @@
 """
-Explainability router for remote Gemma models via Colab.
-This router calls the Colab Flask server's /explain endpoints.
+Explainability router — proxies to the RunPod pod's /explain/* stubs.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -8,21 +7,20 @@ from pydantic import BaseModel
 from typing import Optional
 import asyncio
 
+from model_manager import MODEL_CONFIGS
+
 router = APIRouter()
+
+VALID_MODEL_IDS = set(MODEL_CONFIGS.keys())
 
 
 class ExplainRequest(BaseModel):
-    model_id: str  # "gemma-base" or "gemma-finetuned"
+    model_id: str
     prompt: str
     max_new_tokens: int = 256
     attn_layer: int = 0
     attn_head: int = 0
-    response: Optional[str] = None  # pass pre-generated response to skip re-running inference
-
-
-class TokenConfidence(BaseModel):
-    token: str
-    confidence: float
+    response: Optional[str] = None
 
 
 class AttentionData(BaseModel):
@@ -32,52 +30,30 @@ class AttentionData(BaseModel):
     head: int
 
 
-class LogitLensLayer(BaseModel):
-    layer: int
-    predicted_token: str
-    probability: float
-
-
-class GradientAttribution(BaseModel):
-    token: str
-    score: float
-
-
-class HiddenStateNorm(BaseModel):
-    layer: int
-    norm: float
-
-
-def get_model_type(model_id: str) -> str:
-    """Map model_id to Colab model_type."""
-    if model_id == "gemma-base":
-        return "base"
-    elif model_id == "gemma-finetuned":
-        return "finetuned"
-    else:
-        raise ValueError(f"Unknown model_id: {model_id}")
+def _validate(model_id: str) -> None:
+    if model_id not in VALID_MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model_id {model_id!r}. Valid: {sorted(VALID_MODEL_IDS)}",
+        )
 
 
 @router.post("/attention", response_model=AttentionData)
 async def get_attention(request: ExplainRequest):
-    """Get attention weights for specific layer and head."""
+    _validate(request.model_id)
     try:
         from remote_model_client import get_attention_weights
-        
-        model_type = get_model_type(request.model_id)
-        
         result = await get_attention_weights(
-            model_type=model_type,
+            model_id=request.model_id,
             prompt=request.prompt,
             attn_layer=request.attn_layer,
-            attn_head=request.attn_head
+            attn_head=request.attn_head,
         )
-        
         return AttentionData(
             tokens=result["tokens"],
             matrix=result["matrix"],
             layer=result["layer"],
-            head=result["head"]
+            head=result["head"],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -85,34 +61,20 @@ async def get_attention(request: ExplainRequest):
 
 @router.post("/confidence")
 async def get_token_confidence_endpoint(request: ExplainRequest):
-    """Get token-by-token confidence scores."""
+    _validate(request.model_id)
     try:
-        from remote_model_client import get_token_confidence, format_math_prompt
-        
-        model_type = get_model_type(request.model_id)
-        
-        # If no response provided, generate one first
-        if not request.response:
-            from remote_model_client import get_base_gemma_response, get_finetuned_gemma_response
-            
-            if model_type == "base":
-                gen_result = await get_base_gemma_response(request.prompt, request.max_new_tokens)
-            else:
-                gen_result = await get_finetuned_gemma_response(request.prompt, request.max_new_tokens)
-            
-            response_text = gen_result["response"]
-        else:
-            response_text = request.response
-        
-        # Format prompt for Gemma
-        formatted_prompt = format_math_prompt(request.prompt)
-        
+        from remote_model_client import get_token_confidence, get_model_response, format_math_prompt
+
+        response_text = request.response
+        if not response_text:
+            gen = await get_model_response(request.model_id, request.prompt, request.max_new_tokens)
+            response_text = gen["response"]
+
         result = await get_token_confidence(
-            model_type=model_type,
-            prompt=formatted_prompt,
-            response=response_text
+            model_id=request.model_id,
+            prompt=format_math_prompt(request.prompt),
+            response=response_text,
         )
-        
         return {"token_confidence": result["token_confidence"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -120,34 +82,20 @@ async def get_token_confidence_endpoint(request: ExplainRequest):
 
 @router.post("/logit-lens")
 async def get_logit_lens_endpoint(request: ExplainRequest):
-    """Get logit lens data (predicted tokens at each layer)."""
+    _validate(request.model_id)
     try:
-        from remote_model_client import get_logit_lens, format_math_prompt
-        
-        model_type = get_model_type(request.model_id)
-        
-        # If no response provided, generate one first
-        if not request.response:
-            from remote_model_client import get_base_gemma_response, get_finetuned_gemma_response
-            
-            if model_type == "base":
-                gen_result = await get_base_gemma_response(request.prompt, request.max_new_tokens)
-            else:
-                gen_result = await get_finetuned_gemma_response(request.prompt, request.max_new_tokens)
-            
-            response_text = gen_result["response"]
-        else:
-            response_text = request.response
-        
-        # Format prompt for Gemma
-        formatted_prompt = format_math_prompt(request.prompt)
-        
+        from remote_model_client import get_logit_lens, get_model_response, format_math_prompt
+
+        response_text = request.response
+        if not response_text:
+            gen = await get_model_response(request.model_id, request.prompt, request.max_new_tokens)
+            response_text = gen["response"]
+
         result = await get_logit_lens(
-            model_type=model_type,
-            prompt=formatted_prompt,
-            response=response_text
+            model_id=request.model_id,
+            prompt=format_math_prompt(request.prompt),
+            response=response_text,
         )
-        
         return {"logit_lens": result["logit_lens"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -155,20 +103,13 @@ async def get_logit_lens_endpoint(request: ExplainRequest):
 
 @router.post("/hidden-states")
 async def get_hidden_states_endpoint(request: ExplainRequest):
-    """Get hidden state norms at each layer."""
+    _validate(request.model_id)
     try:
         from remote_model_client import get_hidden_states, format_math_prompt
-        
-        model_type = get_model_type(request.model_id)
-        
-        # Format prompt for Gemma
-        formatted_prompt = format_math_prompt(request.prompt)
-        
         result = await get_hidden_states(
-            model_type=model_type,
-            prompt=formatted_prompt
+            model_id=request.model_id,
+            prompt=format_math_prompt(request.prompt),
         )
-        
         return {"hidden_state_norms": result["hidden_state_norms"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -176,31 +117,20 @@ async def get_hidden_states_endpoint(request: ExplainRequest):
 
 @router.post("/attribution")
 async def get_gradient_attribution_endpoint(request: ExplainRequest):
-    """Get gradient-based attribution scores."""
+    _validate(request.model_id)
     try:
-        from remote_model_client import get_gradient_attribution
-        
-        model_type = get_model_type(request.model_id)
-        
-        # If no response provided, generate one first
-        if not request.response:
-            from remote_model_client import get_base_gemma_response, get_finetuned_gemma_response
-            
-            if model_type == "base":
-                gen_result = await get_base_gemma_response(request.prompt, request.max_new_tokens)
-            else:
-                gen_result = await get_finetuned_gemma_response(request.prompt, request.max_new_tokens)
-            
-            response_text = gen_result["response"]
-        else:
-            response_text = request.response
-        
+        from remote_model_client import get_gradient_attribution, get_model_response
+
+        response_text = request.response
+        if not response_text:
+            gen = await get_model_response(request.model_id, request.prompt, request.max_new_tokens)
+            response_text = gen["response"]
+
         result = await get_gradient_attribution(
-            model_type=model_type,
+            model_id=request.model_id,
             prompt=request.prompt,
-            response=response_text
+            response=response_text,
         )
-        
         return {"gradient_attribution": result["gradient_attribution"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

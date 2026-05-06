@@ -8,66 +8,13 @@ import {
   type SlotState,
   type GenerationResult,
 } from '@/components/ModelComparisonBento'
-import { generateMockAttributionGraph } from '@/utils/mockAttributionData'
 import { COMPARISON_MODEL_TABS, type ComparisonModelId } from '@/modelSpecs'
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────────────────────
 
-function generateFillerData(prompt: string) {
-  const words = prompt.split(' ').filter((w) => w.length > 0)
-  const tokens = words.slice(0, 15)
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8000'
 
-  const confidence = tokens.map(() =>
-    Math.max(0.1, Math.min(0.95, 0.5 + (Math.random() - 0.5) * 0.6)),
-  )
-
-  const attentionMatrix = Array(tokens.length)
-    .fill(0)
-    .map(() => Array(tokens.length).fill(0).map(() => Math.random() * 0.8))
-
-  const logitLens: { layer: number; word_position: number; predicted_token: string; probability: number }[] = []
-  for (let layer = 0; layer < 12; layer++) {
-    for (let pos = 0; pos < Math.min(5, tokens.length); pos++) {
-      logitLens.push({
-        layer,
-        word_position: pos,
-        predicted_token: tokens[pos] || 'the',
-        probability: Math.max(0.01, Math.random() * 0.9),
-      })
-    }
-  }
-
-  const attribution = tokens.map((token) => ({
-    token,
-    score: Math.random() * 0.05,
-  }))
-
-  const hiddenStates = Array(12)
-    .fill(0)
-    .map((_, i) => ({
-      layer: i,
-      norm: 10 + Math.random() * 20,
-    }))
-
-  const response = `This is a simulated response for: "${prompt}". In a real scenario, the model would provide a thoughtful answer with reasoning and analysis.`
-
-  return {
-    response,
-    thinking: "This is simulated thinking that would show the model's reasoning process step by step.",
-    final_answer: 'This is the final simulated answer.',
-    token_count: tokens.length,
-    confidence: confidence.map((conf, i) => ({ token: tokens[i], confidence: conf })),
-    attention: {
-      tokens,
-      matrix: attentionMatrix,
-      layer: 0,
-      head: 0,
-    },
-    logitLens,
-    attribution,
-    hiddenStates,
-  }
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function loadingSlot(): SlotState {
   return { status: 'loading', result: null, explain: {}, graph: null }
@@ -79,30 +26,42 @@ function idleSlots(): Record<ComparisonModelId, SlotState> {
   ) as Record<ComparisonModelId, SlotState>
 }
 
-function buildTemplateSlot(
+async function fetchModelSlot(
+  tab: (typeof COMPARISON_MODEL_TABS)[number],
   prompt: string,
-  modelId: ComparisonModelId,
-  modelLabel: string,
-): SlotState {
-  const filler = generateFillerData(prompt)
-  const response = `[${modelLabel} — template preview]\n\nStep 1: Restate the problem.\nStep 2: Apply the method.\nStep 3: State the conclusion.\n\n${filler.response}`
-  const result: GenerationResult = {
-    model_id: modelId,
-    response,
-    thinking: filler.thinking,
-    final_answer: `(${modelLabel}) ${filler.final_answer}`,
-    token_count: filler.token_count,
+): Promise<SlotState> {
+  const res = await fetch(`${API_BASE}/generate/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_id: tab.id, prompt, max_new_tokens: 512 }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => `HTTP ${res.status}`)
+    throw new Error(detail)
   }
+  const data = await res.json()
+  const result: GenerationResult = {
+    model_id: tab.id,
+    response: data.response ?? '',
+    thinking: data.thinking ?? null,
+    final_answer: data.final_answer ?? data.response ?? '',
+    token_count: data.token_count ?? 0,
+  }
+  return { status: 'ready', result, explain: {}, graph: null }
+}
+
+function errorSlot(tab: (typeof COMPARISON_MODEL_TABS)[number], message: string): SlotState {
   return {
     status: 'ready',
-    result,
-    explain: {
-      confidence: filler.confidence,
-      logitLens: filler.logitLens,
-      attribution: filler.attribution,
-      hiddenStates: filler.hiddenStates,
+    result: {
+      model_id: tab.id,
+      response: `Error: ${message}`,
+      thinking: null,
+      final_answer: `Error: ${message}`,
+      token_count: 0,
     },
-    graph: generateMockAttributionGraph(prompt, response),
+    explain: {},
+    graph: null,
   }
 }
 
@@ -262,7 +221,7 @@ function MainApp() {
 
   const handleSubmit = (prompt: string) => {
     setIsLoading(true)
-    setInfoBanner('Template preview per model — swap for RunPod API when connected.')
+    setInfoBanner(null)
     setShowComparison(true)
     setExpandedCard(null)
     setSlots(
@@ -277,15 +236,20 @@ function MainApp() {
       window.scrollTo({ top: window.innerHeight, behavior: 'smooth' })
     }, 100)
 
-    const staggerMs = 450
-    COMPARISON_MODEL_TABS.forEach((tab, index) => {
-      window.setTimeout(() => {
-        setSlots((prev) => ({
-          ...prev,
-          [tab.id]: buildTemplateSlot(prompt, tab.id, tab.label),
-        }))
-        if (index === 0) setIsLoading(false)
-      }, index * staggerMs)
+    let completed = 0
+    COMPARISON_MODEL_TABS.forEach((tab) => {
+      fetchModelSlot(tab, prompt)
+        .then((slot) => {
+          setSlots((prev) => ({ ...prev, [tab.id]: slot }))
+        })
+        .catch((err: Error) => {
+          setSlots((prev) => ({ ...prev, [tab.id]: errorSlot(tab, err.message) }))
+          setInfoBanner(`One or more models failed — is the backend running and MODEL_BASE_URL set?`)
+        })
+        .finally(() => {
+          completed += 1
+          if (completed === COMPARISON_MODEL_TABS.length) setIsLoading(false)
+        })
     })
   }
 
@@ -325,9 +289,9 @@ function MainApp() {
         </div>
 
         {(showComparison || isLoading) && (
-          <div className="p-8 max-w-[1920px] mx-auto">
+          <div className="px-8 pt-0 pb-8 max-w-[1920px] mx-auto -mt-16">
             <div
-              className="mb-6 flex w-full border border-gray-600/50 bg-black/20"
+              className="mb-4 flex w-full border border-gray-600/50 bg-black/20"
               role="tablist"
               aria-label="Model comparison"
             >

@@ -84,35 +84,35 @@ export default function TokenFlow({ tokens, confidence, className }: TokenFlowPr
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
-          <XAxis 
+          <XAxis
             dataKey="position"
             stroke="hsl(0 0% 60%)"
             tick={{ fill: 'hsl(0 0% 70%)', fontSize: 11 }}
             label={{ value: 'Token Position', position: 'insideBottom', offset: -10, fill: 'hsl(0 0% 70%)' }}
           />
-          <YAxis 
+          <YAxis
             domain={[0, 100]}
             stroke="hsl(0 0% 60%)"
             tick={{ fill: 'hsl(0 0% 70%)', fontSize: 11 }}
             label={{ value: 'Confidence (%)', angle: -90, position: 'insideLeft', fill: 'hsl(0 0% 70%)' }}
           />
           <Tooltip content={<CustomTooltip />} />
-          <ReferenceLine 
-            y={avgConfidence} 
-            stroke="hsl(45 93.4% 47.5%)" 
-            strokeDasharray="5 5" 
+          <ReferenceLine
+            y={avgConfidence}
+            stroke="hsl(45 93.4% 47.5%)"
+            strokeDasharray="5 5"
             strokeWidth={2}
-            label={{ 
-              value: `Avg: ${avgConfidence.toFixed(1)}%`, 
-              position: 'right', 
-              fill: 'hsl(45 93.4% 47.5%)', 
+            label={{
+              value: `Avg: ${avgConfidence.toFixed(1)}%`,
+              position: 'right',
+              fill: 'hsl(45 93.4% 47.5%)',
               fontSize: 11,
               fontWeight: 600
             }}
           />
-          <Area 
-            type="monotone" 
-            dataKey="confidence" 
+          <Area
+            type="monotone"
+            dataKey="confidence"
             stroke="hsl(221.2 83.2% 53.3%)"
             strokeWidth={2}
             fill="url(#confidenceGradient)"

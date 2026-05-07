@@ -28,11 +28,13 @@ function idleSlots(): Record<ComparisonModelId, SlotState> {
 }
 
 function buildAttributionGraph(
+  prompt: string,
   attrTokens: { token: string; score: number }[],
   responseTokens: { token: string; score: number }[],
 ): AttributionGraph {
   const nodes: AttributionNode[] = []
   const edges: AttributionEdge[] = []
+  const promptTokens = prompt.split(/\s+/).filter((w) => w.length > 0)
 
   // Top input tokens by score
   const topInputs = [...attrTokens].sort((a, b) => b.score - a.score).slice(0, 10)
@@ -56,7 +58,7 @@ function buildAttributionGraph(
   topInputs.forEach((inp, i) => {
     for (let f = 0; f < numFeats; f++) {
       if (inp.score * (f + 1) / numFeats > 0.2) {
-        edges.push({ id: `e-i${i}-f${f}`, source: `input-${i}`, target: `feat-${f}`, weight: inp.score * (1 - f / numFeats) })
+        edges.push({ source: `input-${i}`, target: `feat-${f}`, weight: inp.score * (1 - f / numFeats) })
       }
     }
   })
@@ -64,7 +66,7 @@ function buildAttributionGraph(
   // Edges: features → outputs
   topOutputs.forEach((_, o) => {
     for (let f = 0; f < numFeats; f++) {
-      edges.push({ id: `e-f${f}-o${o}`, source: `feat-${f}`, target: `output-${o}`, weight: Math.random() * 0.8 + 0.1 })
+      edges.push({ source: `feat-${f}`, target: `output-${o}`, weight: Math.random() * 0.8 + 0.1 })
     }
   })
 
@@ -73,6 +75,8 @@ function buildAttributionGraph(
   return {
     nodes,
     edges,
+    prompt,
+    promptTokens,
     totalNodes: nodes.length,
     totalEdges: edges.length,
     explainedBehavior: Math.min(explainedBehavior, 1),
@@ -112,19 +116,18 @@ async function fetchModelSlot(
   }
   const response = result.final_answer || result.response
 
-  const [confData, hiddenData, logitData, attrData] = await Promise.all([
-    post(`${API_BASE}/explain/confidence`, { model_id: tab.id, prompt, response }),
-    post(`${API_BASE}/explain/hidden-states`, { model_id: tab.id, prompt }),
-    post(`${API_BASE}/explain/logit-lens`, { model_id: tab.id, prompt, response }),
-    post(`${API_BASE}/explain/attribution`, { model_id: tab.id, prompt, response }),
-  ])
+  // Sequential to avoid GPU OOM — pod serialises these via _GEN_LOCK anyway
+  const confData   = await post(`${API_BASE}/explain/confidence`,    { model_id: tab.id, prompt, response })
+  const hiddenData = await post(`${API_BASE}/explain/hidden-states`,  { model_id: tab.id, prompt })
+  const logitData  = await post(`${API_BASE}/explain/logit-lens`,     { model_id: tab.id, prompt, response })
+  const attrData   = await post(`${API_BASE}/explain/attribution`,    { model_id: tab.id, prompt, response })
 
   const attrTokens: { token: string; score: number }[] = attrData?.gradient_attribution ?? []
   const confTokens: { token: string; confidence: number }[] = confData?.token_confidence ?? []
 
   // Build attribution graph from real scores
   const responseAttrTokens = attrTokens.slice(Math.floor(attrTokens.length / 2))
-  const graph = attrTokens.length > 0 ? buildAttributionGraph(attrTokens, responseAttrTokens) : null
+  const graph = attrTokens.length > 0 ? buildAttributionGraph(prompt, attrTokens, responseAttrTokens) : null
 
   const explain = {
     confidence: confTokens,

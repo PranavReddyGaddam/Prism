@@ -37,18 +37,37 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
     import asyncio
     from remote_model_client import get_model_response
 
+    import re
+
     result = asyncio.run(get_model_response(model_id, prompt, max_new_tokens))
     full_response = result.get("response", "")
 
-    # Extract the answer portion if the model echoes the prompt header
+    # Strip echoed prompt header if present
     if "### Solution:" in full_response:
-        final_answer = full_response.split("### Solution:")[-1].strip()
+        body = full_response.split("### Solution:")[-1].strip()
     else:
-        final_answer = full_response.strip()
+        body = full_response.strip()
+
+    # Extract numbered steps (Step 1:, Step 2:, 1., 2., etc.)
+    step_pattern = re.compile(
+        r'(?:Step\s+\d+[:\.]|^\d+[\.\)])\s*.+?(?=(?:Step\s+\d+[:\.]|^\d+[\.\)])|$)',
+        re.DOTALL | re.MULTILINE | re.IGNORECASE
+    )
+    steps = [s.strip() for s in step_pattern.findall(body) if s.strip()]
+
+    # thinking = all steps joined; final_answer = last paragraph or last step
+    if steps:
+        thinking = "\n\n".join(steps)
+        # Final answer is the last sentence/paragraph after the last step
+        after_steps = body[body.rfind(steps[-1]) + len(steps[-1]):].strip()
+        final_answer = after_steps if after_steps else steps[-1]
+    else:
+        thinking = None
+        final_answer = body
 
     return {
         "response": full_response,
-        "thinking": None,
+        "thinking": thinking,
         "final_answer": final_answer,
         "token_count": len(full_response) // 4,
     }

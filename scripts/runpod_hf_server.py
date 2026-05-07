@@ -39,8 +39,10 @@ from pydantic import BaseModel
 
 app = FastAPI(title="RunPod HF bridge — math models", version="0.2.0")
 
-# Model cache: path → (tokenizer, model)
+# Only keep the most recently used model in memory — 4x7B at bfloat16 exceeds 80GB VRAM
 _cache: Dict[str, Tuple[Any, Any]] = {}
+_cache_order: list = []  # tracks LRU order
+MAX_CACHED_MODELS = 1
 
 # One inference at a time — concurrent GPU generate/load races CUDA and often returns 500
 # when the frontend fires four parallel POST /generate calls.
@@ -63,12 +65,28 @@ def _dtype():
     return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
+def _evict_lru() -> None:
+    while len(_cache) >= MAX_CACHED_MODELS and _cache_order:
+        evict_path = _cache_order.pop(0)
+        if evict_path in _cache:
+            _, evicted_model = _cache.pop(evict_path)
+            evicted_model.cpu()
+            del evicted_model
+            torch.cuda.empty_cache()
+
+
 def _load(path: str, trust: bool) -> Tuple[Any, Any]:
     if path in _cache:
+        # Move to end (most recently used)
+        if path in _cache_order:
+            _cache_order.remove(path)
+        _cache_order.append(path)
         return _cache[path]
     if not path or not os.path.isdir(path):
         raise HTTPException(status_code=500, detail=f"Invalid model path: {path!r}")
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    _evict_lru()
 
     tok = AutoTokenizer.from_pretrained(path, trust_remote_code=trust)
     model = AutoModelForCausalLM.from_pretrained(
@@ -79,6 +97,7 @@ def _load(path: str, trust: bool) -> Tuple[Any, Any]:
     )
     model.eval()
     _cache[path] = (tok, model)
+    _cache_order.append(path)
     return _cache[path]
 
 
@@ -131,6 +150,7 @@ def generate(body: GenerateBody):
                 torch.cuda.empty_cache()
             raise HTTPException(status_code=503, detail=f"GPU inference failed: {e}") from e
         text = tok.decode(out[0], skip_special_tokens=True)
+        torch.cuda.empty_cache()
     return {"model_id": body.model_id, "response": text}
 
 
@@ -165,6 +185,7 @@ def ex_confidence(body: ExplainBody):
         for i, tok_id in enumerate(ids[1:], start=1):
             conf = probs[i - 1, tok_id].item()
             token_confidence.append({"token": tok.decode([tok_id.item()]), "confidence": conf})
+        torch.cuda.empty_cache()
     return {"token_confidence": token_confidence}
 
 
@@ -179,6 +200,7 @@ def ex_hidden(body: ExplainBody):
             {"layer": i, "norm": hs[0].float().norm(dim=-1).mean().item()}
             for i, hs in enumerate(out.hidden_states)
         ]
+        torch.cuda.empty_cache()
     return {"hidden_state_norms": hidden_state_norms}
 
 
@@ -208,21 +230,27 @@ def ex_logit(body: ExplainBody):
 
 @app.post("/explain/attribution")
 def ex_attr(body: ExplainBody):
+    """Attention-rollout attribution — works on all architectures, no backprop needed."""
     tok, model = _resolve(body)
     full = (body.prompt + " " + body.response) if body.response else body.prompt
     with _GEN_LOCK:
-        enc = tok(full, return_tensors="pt")
-        input_ids = enc["input_ids"].to(model.device)
-        embeds = model.get_input_embeddings()(input_ids).detach().requires_grad_(True)
-        attention_mask = enc.get("attention_mask")
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(model.device)
-        out = model(inputs_embeds=embeds.to(model.dtype), attention_mask=attention_mask)
-        loss = out.logits[0, :-1].softmax(-1).max(-1).values.mean()
-        loss.backward()
-        scores = embeds.grad[0].float().norm(dim=-1)
+        inputs = _encode(tok, model, full)
+        with torch.inference_mode():
+            out = model(**inputs, output_attentions=True)
+        torch.cuda.empty_cache()
+        # Average attention across all layers and heads → score per input token
+        # out.attentions: tuple of (1, heads, seq, seq) per layer
+        attn_stack = torch.stack([a[0].float().mean(dim=0) for a in out.attentions])  # (layers, seq, seq)
+        # Rollout: multiply attention matrices layer by layer (add residual identity)
+        rollout = torch.eye(attn_stack.shape[-1], device=attn_stack.device)
+        for a in attn_stack:
+            a = a + torch.eye(a.shape[-1], device=a.device)
+            a = a / a.sum(dim=-1, keepdim=True)
+            rollout = a @ rollout
+        # Score for each token = how much the last token attends to it
+        scores = rollout[-1]
         scores = (scores / scores.max()).tolist()
-        tokens = [tok.decode([i]) for i in input_ids[0].tolist()]
+        tokens = [tok.decode([i]) for i in inputs["input_ids"][0].tolist()]
         gradient_attribution = [{"token": t, "score": s} for t, s in zip(tokens, scores)]
     return {"gradient_attribution": gradient_attribution}
 

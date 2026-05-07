@@ -4,16 +4,18 @@ import {
 } from 'recharts'
 import type { PostHocSlot, LimeResult, TokenShapResult, CounterfactualResult } from '@/types/posthoc'
 
-const POS_COLOR = '#86efac'   // tailwind green-300
-const NEG_COLOR = '#fca5a5'   // tailwind red-300
+const POS_COLOR = '#86efac'
+const NEG_COLOR = '#fca5a5'
 const NEUTRAL_BG = 'rgba(255,255,255,0.04)'
+
+const CARD_BG = '#202020'
+const INNER_BG = '#2a2a2a'
+const BORDER = '1px solid rgba(255,255,255,0.08)'
 
 function colorForAttr(value: number, max: number): string {
   if (max <= 0) return NEUTRAL_BG
   const intensity = Math.min(1, Math.abs(value) / max)
-  if (value >= 0) {
-    return `rgba(134, 239, 172, ${0.15 + intensity * 0.55})`
-  }
+  if (value >= 0) return `rgba(134, 239, 172, ${0.15 + intensity * 0.55})`
   return `rgba(252, 165, 165, ${0.15 + intensity * 0.55})`
 }
 
@@ -45,24 +47,26 @@ function TopKBars({ words, attributions, k = 12 }: { words: string[]; attributio
   }, [words, attributions, k])
 
   return (
-    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 26)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 20, right: 30, top: 4, bottom: 4 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-        <XAxis type="number" stroke="rgba(255,255,255,0.5)" fontSize={10} />
-        <YAxis type="category" dataKey="word" stroke="rgba(255,255,255,0.7)" fontSize={11} width={100} />
-        <Tooltip
-          cursor={false}
-          contentStyle={{ backgroundColor: '#181818', border: '1px solid #333', fontSize: 12 }}
-          labelStyle={{ color: '#fff' }}
-          formatter={(v: number | undefined) => (v ?? 0).toFixed(4)}
-        />
-        <Bar dataKey="score" radius={[0, 3, 3, 0]}>
-          {data.map((d, i) => (
-            <Cell key={i} fill={d.score >= 0 ? POS_COLOR : NEG_COLOR} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <div style={{ outline: 'none' }}>
+      <ResponsiveContainer width="100%" height={Math.max(220, data.length * 26)}>
+        <BarChart data={data} layout="vertical" margin={{ left: 20, right: 30, top: 4, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+          <XAxis type="number" stroke="rgba(255,255,255,0.4)" fontSize={10} tickLine={false} />
+          <YAxis type="category" dataKey="word" stroke="rgba(255,255,255,0.6)" fontSize={11} width={100} tickLine={false} axisLine={false} />
+          <Tooltip
+            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
+            labelStyle={{ color: '#fff' }}
+            formatter={(v: number | undefined) => [(v ?? 0).toFixed(4), 'score']}
+          />
+          <Bar dataKey="score" radius={[0, 3, 3, 0]}>
+            {data.map((d, i) => (
+              <Cell key={i} fill={d.score >= 0 ? POS_COLOR : NEG_COLOR} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   )
 }
 
@@ -85,11 +89,11 @@ function LimeCard({ data }: { data: LimeResult }) {
           Samples: <span className="text-white font-mono">{data.n_samples}</span>
         </span>
       </div>
-      <div className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+      <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
         <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Word-level attributions</p>
         <TokenHighlights words={data.words} attributions={data.attributions} />
       </div>
-      <div className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+      <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
         <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Top influential words</p>
         <TopKBars words={data.words} attributions={data.attributions} />
       </div>
@@ -113,11 +117,11 @@ function TokenShapCard({ data }: { data: TokenShapResult }) {
           Coalitions evaluated: <span className="text-white font-mono">{data.n_samples}</span>
         </span>
       </div>
-      <div className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+      <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
         <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Shapley values per word</p>
         <TokenHighlights words={data.words} attributions={data.attributions} />
       </div>
-      <div className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+      <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
         <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Top contributors</p>
         <TopKBars words={data.words} attributions={data.attributions} />
       </div>
@@ -130,7 +134,7 @@ function TokenShapCard({ data }: { data: TokenShapResult }) {
 function CounterfactualCard({ data }: { data: CounterfactualResult }) {
   if (data.note && data.edits.length === 0) {
     return (
-      <div className="text-sm text-gray-400 p-4 rounded-md border border-gray-800 bg-gray-950/50">
+      <div className="text-sm text-gray-400 p-4 rounded-lg" style={{ backgroundColor: INNER_BG, border: BORDER }}>
         {data.note}
       </div>
     )
@@ -153,13 +157,13 @@ function CounterfactualCard({ data }: { data: CounterfactualResult }) {
       </div>
 
       {flipped.length > 0 && (
-        <div className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+        <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
           <p className="text-[10px] uppercase tracking-wider text-emerald-400/90 mb-2">
             Edits that flipped the answer
           </p>
           <div className="space-y-2">
             {flipped.map((e, i) => (
-              <div key={i} className="rounded border border-gray-800 bg-black/40 p-2 text-xs">
+              <div key={i} className="rounded p-2 text-xs" style={{ backgroundColor: '#1a1a1a', border: BORDER }}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-gray-500">change</span>
                   <span className="rounded bg-red-900/30 text-red-200 px-1.5 py-0.5 font-mono">{e.original_token}</span>
@@ -179,7 +183,7 @@ function CounterfactualCard({ data }: { data: CounterfactualResult }) {
       )}
 
       {stable.length > 0 && (
-        <details className="rounded-md border border-gray-800 bg-gray-950/50 p-3">
+        <details className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
           <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-gray-500">
             Edits that did not flip ({stable.length})
           </summary>
@@ -209,7 +213,7 @@ interface PostHocBentoProps {
 
 function Pane({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-gray-700/40 bg-gradient-to-b from-gray-900/40 to-black/60 p-4">
+    <div className="rounded-xl p-4" style={{ backgroundColor: CARD_BG, border: BORDER }}>
       <div className="flex items-baseline gap-3 mb-3">
         <h3 className="text-white text-base font-semibold">{title}</h3>
         <span className="text-gray-500 text-xs">{subtitle}</span>
@@ -226,7 +230,7 @@ function LoadingPane({ title, subtitle }: { title: string; subtitle: string }) {
         <div className="h-3 bg-gray-800 rounded animate-pulse w-3/4" />
         <div className="h-3 bg-gray-800 rounded animate-pulse w-2/3" />
         <div className="h-3 bg-gray-800 rounded animate-pulse w-5/6" />
-        <div className="h-32 bg-gray-800/40 rounded animate-pulse mt-3" />
+        <div className="h-32 rounded animate-pulse mt-3" style={{ backgroundColor: INNER_BG }} />
       </div>
     </Pane>
   )
@@ -235,7 +239,7 @@ function LoadingPane({ title, subtitle }: { title: string; subtitle: string }) {
 export default function PostHocBento({ slot }: PostHocBentoProps) {
   if (slot.status === 'idle') {
     return (
-      <div className="rounded-xl border border-gray-700/40 bg-gray-950/40 p-10 text-center">
+      <div className="rounded-xl p-10 text-center" style={{ backgroundColor: CARD_BG, border: BORDER }}>
         <p className="text-gray-400 text-sm">
           Submit a prompt to compute post-hoc explanations (LIME, TokenSHAP, counterfactuals).
         </p>
@@ -245,7 +249,7 @@ export default function PostHocBento({ slot }: PostHocBentoProps) {
 
   if (slot.status === 'error') {
     return (
-      <div className="rounded-xl border border-red-900/40 bg-red-950/20 p-6 text-sm text-red-300">
+      <div className="rounded-xl p-6 text-sm text-red-300" style={{ backgroundColor: '#1a0a0a', border: '1px solid rgba(239,68,68,0.3)' }}>
         Post-hoc analysis failed: {slot.error ?? 'unknown error'}
       </div>
     )

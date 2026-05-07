@@ -22,4 +22,11 @@
     font-family: 'Aeonik', system-ui, -apple-system, sans-serif;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+
+  /* Kill browser focus rings on Recharts SVG containers */
+  .recharts-wrapper,
+  .recharts-wrapper *,
+  .recharts-surface {
+    outline: none !important;
+  }
 }

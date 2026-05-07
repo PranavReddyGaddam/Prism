@@ -361,6 +361,21 @@ def _short_generate(model, tok, prompt: str, max_new: int = 96) -> str:
     return full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
 
 
+_PROMPT_PREFIX = "### Problem:\n"
+_PROMPT_SUFFIX = "\n### Solution:\n"
+
+def _unwrap_prompt(prompt: str) -> str:
+    """Strip ### Problem:/Solution: wrapper if present, returning raw problem text."""
+    p = prompt.strip()
+    if p.startswith(_PROMPT_PREFIX):
+        p = p[len(_PROMPT_PREFIX):]
+    if _PROMPT_SUFFIX.strip() in p:
+        p = p[:p.rfind(_PROMPT_SUFFIX.strip())]
+    return p.strip()
+
+def _wrap_prompt(raw: str) -> str:
+    return f"{_PROMPT_PREFIX}{raw}{_PROMPT_SUFFIX}"
+
 def _resolve_model(model_id: str):
     if model_id not in MODEL_ENV:
         raise HTTPException(status_code=400, detail=f"Unknown model_id {model_id!r}")
@@ -411,14 +426,15 @@ def posthoc_lime(body: PostHocBody):
     n_samples = max(10, min(int(body.n_samples or 30), 100))
     max_new = min(int(body.max_new_tokens or 64), 128)
 
-    words = body.prompt.split()
+    raw_problem = _unwrap_prompt(body.prompt)
+    words = raw_problem.split()
     n_words = len(words)
     if n_words < 2:
         raise HTTPException(status_code=400, detail="Prompt too short for LIME")
 
     with _GEN_LOCK:
         # Reference answer (unperturbed)
-        ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
+        ref_response = body.response or _short_generate(model, tok, _wrap_prompt(raw_problem), max_new=max_new)
         ref_answer = _extract_final_answer(ref_response)
 
         rng = np.random.default_rng(42)
@@ -431,7 +447,7 @@ def posthoc_lime(body: PostHocBody):
             if not kept:
                 targets[i] = 0.0
                 continue
-            perturbed_prompt = " ".join(kept)
+            perturbed_prompt = _wrap_prompt(" ".join(kept))
             try:
                 resp = _short_generate(model, tok, perturbed_prompt, max_new=max_new)
                 ans = _extract_final_answer(resp)
@@ -480,13 +496,14 @@ def posthoc_tokenshap(body: PostHocBody):
     n_samples = max(10, min(int(body.n_samples or 30), 100))
     max_new = min(int(body.max_new_tokens or 64), 128)
 
-    words = body.prompt.split()
+    raw_problem = _unwrap_prompt(body.prompt)
+    words = raw_problem.split()
     n_words = len(words)
     if n_words < 2:
         raise HTTPException(status_code=400, detail="Prompt too short for TokenSHAP")
 
     with _GEN_LOCK:
-        ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
+        ref_response = body.response or _short_generate(model, tok, _wrap_prompt(raw_problem), max_new=max_new)
         ref_answer = _extract_final_answer(ref_response)
 
         rng = np.random.default_rng(7)
@@ -501,7 +518,7 @@ def posthoc_tokenshap(body: PostHocBody):
             if not coal_idx:
                 return 0.0
             kept = [words[j] for j in coal_idx]
-            perturbed = " ".join(kept)
+            perturbed = _wrap_prompt(" ".join(kept))
             try:
                 resp = _short_generate(model, tok, perturbed, max_new=max_new)
                 ans = _extract_final_answer(resp)

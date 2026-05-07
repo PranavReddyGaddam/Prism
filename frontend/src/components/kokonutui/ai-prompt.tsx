@@ -32,9 +32,19 @@ export default function AI_Prompt({ onSubmit }: { onSubmit?: (prompt: string) =>
   });
 
   const COT_QUESTIONS = [
+    // Original
     "A father is 4 times as old as his son. In 20 years, he will be twice as old as his son. How old is the son now?",
     "There are chickens and cows in a farm. There are 30 heads and 84 legs in total. How many chickens and how many cows are there?",
-    "A bag contains 5 red balls and 7 blue balls. Two balls are drawn without replacement. What is the probability that both balls are red?"
+    "A bag contains 5 red balls and 7 blue balls. Two balls are drawn without replacement. What is the probability that both balls are red?",
+    // New
+    "A train travels 120 km at 60 km/h, then 180 km at 90 km/h. What is the average speed for the entire journey?",
+    "If 3x + 7 = 22, find the value of 5x - 3.",
+    "A store sells apples for $1.20 each and oranges for $0.80 each. If John buys 5 apples and 8 oranges and pays with a $20 bill, how much change does he get?",
+    "Two pipes can fill a tank in 6 hours and 8 hours respectively. If both are opened together, how long will it take to fill the tank?",
+    "What is the remainder when 2^100 is divided by 7?",
+    "Find the greatest common divisor of 252 and 198.",
+    "A circle has an area of 49π. What is its circumference?",
+    "In a class of 30 students, 18 play football and 15 play basketball. If 10 play both, how many play neither?",
   ];
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

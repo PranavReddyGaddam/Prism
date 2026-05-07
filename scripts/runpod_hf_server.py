@@ -225,29 +225,77 @@ def ex_logit(body: ExplainBody):
 
 @app.post("/explain/attribution")
 def ex_attr(body: ExplainBody):
-    """Attention-rollout attribution — works on all architectures, no backprop needed."""
+    """Attention-rollout attribution with per-position top/bottom token predictions."""
     tok, model = _resolve(body)
     full = (body.prompt + " " + body.response) if body.response else body.prompt
+    TOP_K = 5  # top and bottom predictions per position
+
     with _GEN_LOCK:
         inputs = _encode(tok, model, full)
         with torch.inference_mode():
-            out = model(**inputs, output_attentions=True)
+            out = model(**inputs, output_attentions=True, output_hidden_states=True)
         torch.cuda.empty_cache()
-        # Average attention across all layers and heads → score per input token
-        # out.attentions: tuple of (1, heads, seq, seq) per layer
-        attn_stack = torch.stack([a[0].float().mean(dim=0) for a in out.attentions])  # (layers, seq, seq)
-        # Rollout: multiply attention matrices layer by layer (add residual identity)
+
+        tokens = [tok.decode([i]) for i in inputs["input_ids"][0].tolist()]
+        seq_len = len(tokens)
+
+        # Attention rollout scores
+        attn_stack = torch.stack([a[0].float().mean(dim=0) for a in out.attentions])
         rollout = torch.eye(attn_stack.shape[-1], device=attn_stack.device)
         for a in attn_stack:
             a = a + torch.eye(a.shape[-1], device=a.device)
             a = a / a.sum(dim=-1, keepdim=True)
             rollout = a @ rollout
-        # Score for each token = how much the last token attends to it
         scores = rollout[-1]
         scores = (scores / scores.max()).tolist()
-        tokens = [tok.decode([i]) for i in inputs["input_ids"][0].tolist()]
         gradient_attribution = [{"token": t, "score": s} for t, s in zip(tokens, scores)]
-    return {"gradient_attribution": gradient_attribution}
+
+        # Per-position top/bottom token predictions at final layer
+        lm_head = _get_lm_head(model)
+        last_hidden = out.hidden_states[-1][0].clone()  # (seq, hidden)
+        with torch.no_grad():
+            logits = lm_head(last_hidden.to(lm_head.weight.dtype))  # (seq, vocab)
+        probs = torch.softmax(logits, dim=-1)
+
+        position_predictions = []
+        for pos in range(seq_len):
+            pos_probs = probs[pos]
+            top_ids = pos_probs.topk(TOP_K).indices.tolist()
+            top_probs = pos_probs.topk(TOP_K).values.tolist()
+            # Bottom k = lowest prob non-zero tokens
+            bottom_ids = pos_probs.topk(TOP_K, largest=False).indices.tolist()
+            bottom_probs = pos_probs.topk(TOP_K, largest=False).values.tolist()
+            position_predictions.append({
+                "position": pos,
+                "token": tokens[pos],
+                "top": [{"token": tok.decode([tid]), "probability": p, "rank": r + 1}
+                        for r, (tid, p) in enumerate(zip(top_ids, top_probs))],
+                "bottom": [{"token": tok.decode([tid]), "probability": p, "rank": r + 1}
+                           for r, (tid, p) in enumerate(zip(bottom_ids, bottom_probs))],
+            })
+
+        # Per-layer attention weights per token (for input/output feature weights)
+        num_layers = len(out.attentions)
+        layer_attention = []
+        for layer_i, attn in enumerate(out.attentions):
+            # Mean over heads, take last token's attention to each input
+            mean_attn = attn[0].float().mean(dim=0)  # (seq, seq)
+            layer_attention.append({
+                "layer": layer_i,
+                "weights": [
+                    {"token": tokens[src], "weight": float(mean_attn[-1, src])}
+                    for src in range(seq_len)
+                ]
+            })
+
+        torch.cuda.empty_cache()
+
+    return {
+        "gradient_attribution": gradient_attribution,
+        "position_predictions": position_predictions,
+        "layer_attention": layer_attention,
+        "tokens": tokens,
+    }
 
 
 @app.post("/explain/attention")

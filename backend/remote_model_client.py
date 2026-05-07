@@ -3,7 +3,8 @@ import httpx
 from typing import Dict
 
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "")
-TIMEOUT = 120.0
+# Pod runs one inference at a time; four parallel UI calls queue — allow headroom.
+TIMEOUT = float(os.getenv("MODEL_HTTP_TIMEOUT", "600"))
 
 VALID_MODEL_IDS = {
     "qwen-2.5-math-7b",

@@ -30,6 +30,7 @@ Start:
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -40,6 +41,10 @@ app = FastAPI(title="RunPod HF bridge — math models", version="0.2.0")
 
 # Model cache: path → (tokenizer, model)
 _cache: Dict[str, Tuple[Any, Any]] = {}
+
+# One inference at a time — concurrent GPU generate/load races CUDA and often returns 500
+# when the frontend fires four parallel POST /generate calls.
+_GEN_LOCK = threading.Lock()
 
 # Maps frontend model_id → (env var for path, env var for trust_remote_code)
 MODEL_ENV: Dict[str, Tuple[str, str]] = {
@@ -107,19 +112,25 @@ def generate(body: GenerateBody):
     if not path:
         raise HTTPException(status_code=500, detail=f"{path_env} is not set on the pod")
 
-    tok, model = _load(path, _trust(trust_env))
-    max_new = min(int(body.max_new_tokens or 512), 4096)
-    pad = tok.pad_token_id or tok.eos_token_id
-    inputs = tok(body.prompt, return_tensors="pt")
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    with torch.inference_mode():
-        out = model.generate(
-            **inputs,
-            max_new_tokens=max_new,
-            do_sample=False,
-            pad_token_id=pad,
-        )
-    text = tok.decode(out[0], skip_special_tokens=True)
+    with _GEN_LOCK:
+        tok, model = _load(path, _trust(trust_env))
+        max_new = min(int(body.max_new_tokens or 512), 4096)
+        pad = tok.pad_token_id or tok.eos_token_id
+        inputs = tok(body.prompt, return_tensors="pt")
+        inputs = {k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device) for k, v in inputs.items()}
+        try:
+            with torch.inference_mode():
+                out = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new,
+                    do_sample=False,
+                    pad_token_id=pad,
+                )
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                torch.cuda.empty_cache()
+            raise HTTPException(status_code=503, detail=f"GPU inference failed: {e}") from e
+        text = tok.decode(out[0], skip_special_tokens=True)
     return {"model_id": body.model_id, "response": text}
 
 

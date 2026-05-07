@@ -187,6 +187,14 @@ def ex_hidden(body: ExplainBody):
     return {"hidden_state_norms": hidden_state_norms}
 
 
+def _get_lm_head(model):
+    """Get the LM head regardless of architecture naming."""
+    for name in ("lm_head", "output", "embed_out", "head"):
+        if hasattr(model, name):
+            return getattr(model, name)
+    raise AttributeError(f"Cannot find lm_head on {type(model).__name__}")
+
+
 @app.post("/explain/logit-lens")
 def ex_logit(body: ExplainBody):
     tok, model = _resolve(body)
@@ -194,10 +202,13 @@ def ex_logit(body: ExplainBody):
         inputs = _encode(tok, model, body.prompt)
         with torch.inference_mode():
             out = model(**inputs, output_hidden_states=True)
-        lm_head = model.lm_head
+        lm_head = _get_lm_head(model)
         logit_lens = []
         for layer_i, hs in enumerate(out.hidden_states):
-            layer_logits = lm_head(hs[0].to(lm_head.weight.dtype))
+            # Clone to detach from inference_mode graph before passing through lm_head
+            hs_clone = hs[0].clone().to(lm_head.weight.dtype)
+            with torch.no_grad():
+                layer_logits = lm_head(hs_clone)
             layer_probs = torch.softmax(layer_logits, dim=-1)
             for pos in range(min(5, hs.shape[1])):
                 top_id = layer_probs[pos].argmax().item()
@@ -208,6 +219,7 @@ def ex_logit(body: ExplainBody):
                     "predicted_token": tok.decode([top_id]),
                     "probability": top_prob,
                 })
+        torch.cuda.empty_cache()
     return {"logit_lens": logit_lens}
 
 

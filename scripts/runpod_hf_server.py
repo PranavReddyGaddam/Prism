@@ -39,10 +39,8 @@ from pydantic import BaseModel
 
 app = FastAPI(title="RunPod HF bridge — math models", version="0.2.0")
 
-# Only keep the most recently used model in memory — 4x7B at bfloat16 exceeds 80GB VRAM
+# Keep all loaded models in memory — 4x7B bfloat16 ~56GB fits in 80GB VRAM
 _cache: Dict[str, Tuple[Any, Any]] = {}
-_cache_order: list = []  # tracks LRU order
-MAX_CACHED_MODELS = 1
 
 # One inference at a time — concurrent GPU generate/load races CUDA and often returns 500
 # when the frontend fires four parallel POST /generate calls.
@@ -65,28 +63,12 @@ def _dtype():
     return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
-def _evict_lru() -> None:
-    while len(_cache) >= MAX_CACHED_MODELS and _cache_order:
-        evict_path = _cache_order.pop(0)
-        if evict_path in _cache:
-            _, evicted_model = _cache.pop(evict_path)
-            evicted_model.cpu()
-            del evicted_model
-            torch.cuda.empty_cache()
-
-
 def _load(path: str, trust: bool) -> Tuple[Any, Any]:
     if path in _cache:
-        # Move to end (most recently used)
-        if path in _cache_order:
-            _cache_order.remove(path)
-        _cache_order.append(path)
         return _cache[path]
     if not path or not os.path.isdir(path):
         raise HTTPException(status_code=500, detail=f"Invalid model path: {path!r}")
     from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    _evict_lru()
 
     tok = AutoTokenizer.from_pretrained(path, trust_remote_code=trust)
     model = AutoModelForCausalLM.from_pretrained(
@@ -97,7 +79,6 @@ def _load(path: str, trust: bool) -> Tuple[Any, Any]:
     )
     model.eval()
     _cache[path] = (tok, model)
-    _cache_order.append(path)
     return _cache[path]
 
 
@@ -112,20 +93,6 @@ class ExplainBody(BaseModel):
     prompt: str
     response: Optional[str] = None
 
-
-@app.on_event("startup")
-def preload_models():
-    """Load all configured models into GPU on startup so first request doesn't cold-start."""
-    for mid, (penv, tenv) in MODEL_ENV.items():
-        path = os.getenv(penv, "").strip()
-        if path:
-            try:
-                print(f"[startup] preloading {mid} from {path} …")
-                _load(path, _trust(tenv))
-                torch.cuda.empty_cache()
-                print(f"[startup] {mid} ready")
-            except Exception as e:
-                print(f"[startup] WARNING: failed to preload {mid}: {e}")
 
 
 @app.get("/health")

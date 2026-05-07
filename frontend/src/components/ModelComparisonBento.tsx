@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import AttributionGraphVisualization from '@/components/visualizations/AttributionGraph'
 import NodeDetailPanel from '@/components/visualizations/NodeDetailPanel'
 import TokenFlow from '@/components/visualizations/TokenFlow'
 import type { AttributionGraph, AttributionNode } from '@/types/attribution'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { buildAttributionGraph, DEFAULT_MAX_LAYERS, DEFAULT_MAX_OUTPUTS } from '@/lib/attributionGraph'
 
 export type SlotStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -44,11 +45,24 @@ export interface ExplainData {
   hiddenStates: HiddenStateNorm[]
 }
 
+export interface RawAttribution {
+  gradientAttribution: { token: string; score: number }[]
+  positionPredictions: {
+    position: number
+    token: string
+    top: { token: string; probability: number; rank: number }[]
+    bottom: { token: string; probability: number; rank: number }[]
+  }[]
+  layerAttention: { layer: number; weights: { token: string; weight: number }[] }[]
+  prompt: string
+}
+
 export interface SlotState {
   status: SlotStatus
   result: GenerationResult | null
   explain: Partial<ExplainData>
   graph: AttributionGraph | null
+  rawAttribution: RawAttribution | null
 }
 
 interface ModelComparisonBentoProps {
@@ -308,11 +322,30 @@ interface ExpandedModalProps {
 export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedModalProps) {
   const result = slot.result
   const explainData = slot.explain
-  const attributionGraph = slot.graph
   const tokens = explainData.confidence || []
   const [inspectedNode, setInspectedNode] = useState<AttributionNode | null>(null)
   const [mounted, setMounted] = useState(false)
   const [closing, setClosing] = useState(false)
+  const [maxLayers, setMaxLayers] = useState(DEFAULT_MAX_LAYERS)
+  const [maxOutputs, setMaxOutputs] = useState(DEFAULT_MAX_OUTPUTS)
+
+  const totalLayers = slot.rawAttribution?.layerAttention.length ?? 0
+  const totalOutputs = slot.rawAttribution
+    ? Math.max(0, slot.rawAttribution.positionPredictions.length - Math.floor(slot.rawAttribution.positionPredictions.length / 2))
+    : 0
+
+  const attributionGraph = useMemo(() => {
+    if (!slot.rawAttribution) return slot.graph
+    const r = slot.rawAttribution
+    return buildAttributionGraph(
+      r.prompt,
+      r.gradientAttribution,
+      r.positionPredictions,
+      r.layerAttention,
+      maxLayers,
+      maxOutputs,
+    )
+  }, [slot.rawAttribution, slot.graph, maxLayers, maxOutputs])
 
   const handleClose = () => {
     setClosing(true)
@@ -380,7 +413,40 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
           }}
         >
           {expandedCard === 'attribution' && attributionGraph && (
-            <div className="flex gap-3" style={{ height: '560px' }}>
+            <div className="flex flex-col gap-3" style={{ height: '600px' }}>
+              {totalLayers > 0 && (
+                <div className="flex items-center gap-6 px-3 py-2 rounded-lg bg-gray-900/40 border border-gray-700/40">
+                  <div className="flex items-center gap-3 flex-1">
+                    <label className="text-gray-400 text-xs font-medium whitespace-nowrap">
+                      Layers shown:
+                      <span className="text-white ml-2 tabular-nums">{Math.min(maxLayers, totalLayers)} / {totalLayers}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={1}
+                      max={totalLayers}
+                      value={Math.min(maxLayers, totalLayers)}
+                      onChange={(e) => setMaxLayers(parseInt(e.target.value, 10))}
+                      className="flex-1 accent-white"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 flex-1">
+                    <label className="text-gray-400 text-xs font-medium whitespace-nowrap">
+                      Output tokens:
+                      <span className="text-white ml-2 tabular-nums">{Math.min(maxOutputs, totalOutputs)} / {totalOutputs}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={1}
+                      max={Math.max(1, totalOutputs)}
+                      value={Math.min(maxOutputs, Math.max(1, totalOutputs))}
+                      onChange={(e) => setMaxOutputs(parseInt(e.target.value, 10))}
+                      className="flex-1 accent-white"
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-3 flex-1 min-h-0">
               <div className="flex-1 min-w-0 overflow-hidden transition-all duration-300 ease-out">
                 <AttributionGraphVisualization
                   data={attributionGraph}
@@ -398,6 +464,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                     <NodeDetailPanel node={inspectedNode} onClose={() => setInspectedNode(null)} />
                   </div>
                 )}
+              </div>
               </div>
             </div>
           )}

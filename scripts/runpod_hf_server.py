@@ -30,9 +30,11 @@ Start:
 from __future__ import annotations
 
 import os
+import re
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -310,6 +312,307 @@ def ex_attn(body: ExplainBody):
         attn = out.attentions[layer][0, head].float().tolist()
         tokens = [tok.decode([i]) for i in inputs["input_ids"][0].tolist()]
     return {"tokens": tokens, "matrix": attn, "layer": layer, "head": head}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-hoc analysis endpoints (LIME, TokenSHAP, counterfactuals)
+# All forward-pass-only — no gradients, no new model loads.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PostHocBody(BaseModel):
+    model_id: str
+    prompt: str
+    response: Optional[str] = None
+    n_samples: Optional[int] = None
+    max_new_tokens: Optional[int] = 96
+
+
+_FINAL_NUMBER_RE = re.compile(r"\\boxed\s*\{\s*([+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+_ANY_NUMBER_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+
+def _extract_final_answer(text: str) -> Optional[str]:
+    if not text:
+        return None
+    m = _FINAL_NUMBER_RE.search(text)
+    if m:
+        return m.group(1)
+    nums = _ANY_NUMBER_RE.findall(text)
+    return nums[-1] if nums else None
+
+
+def _short_generate(model, tok, prompt: str, max_new: int = 96) -> str:
+    pad = tok.pad_token_id or tok.eos_token_id
+    inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=1024)
+    inputs = {
+        k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device)
+        for k, v in inputs.items()
+    }
+    with torch.inference_mode():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=max_new,
+            do_sample=False,
+            pad_token_id=pad,
+        )
+    full = tok.decode(out[0], skip_special_tokens=True)
+    # Strip echoed prompt
+    return full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
+
+
+def _resolve_model(model_id: str):
+    if model_id not in MODEL_ENV:
+        raise HTTPException(status_code=400, detail=f"Unknown model_id {model_id!r}")
+    path_env, trust_env = MODEL_ENV[model_id]
+    path = os.getenv(path_env, "").strip()
+    if not path:
+        raise HTTPException(status_code=500, detail=f"{path_env} not set")
+    return _load(path, _trust(trust_env))
+
+
+@app.post("/posthoc/lime")
+def posthoc_lime(body: PostHocBody):
+    """
+    Word-level LIME via random masking + Ridge regression.
+    Target: match (1.0/0.0) between perturbed answer and reference answer.
+    """
+    from sklearn.linear_model import Ridge
+
+    tok, model = _resolve_model(body.model_id)
+    n_samples = max(20, min(int(body.n_samples or 60), 200))
+    max_new = min(int(body.max_new_tokens or 96), 256)
+
+    words = body.prompt.split()
+    n_words = len(words)
+    if n_words < 2:
+        raise HTTPException(status_code=400, detail="Prompt too short for LIME")
+
+    with _GEN_LOCK:
+        # Reference answer (unperturbed)
+        ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
+        ref_answer = _extract_final_answer(ref_response)
+
+        rng = np.random.default_rng(42)
+        masks = rng.integers(0, 2, size=(n_samples, n_words))
+        masks[0] = np.ones(n_words, dtype=int)  # ensure full prompt is sample 0
+
+        targets = np.zeros(n_samples, dtype=np.float32)
+        for i in range(n_samples):
+            kept = [w for w, k in zip(words, masks[i]) if k == 1]
+            if not kept:
+                targets[i] = 0.0
+                continue
+            perturbed_prompt = " ".join(kept)
+            try:
+                resp = _short_generate(model, tok, perturbed_prompt, max_new=max_new)
+                ans = _extract_final_answer(resp)
+                targets[i] = 1.0 if (ans is not None and ans == ref_answer) else 0.0
+            except Exception:
+                targets[i] = 0.0
+            if i % 16 == 0:
+                torch.cuda.empty_cache()
+
+        # Cosine-distance kernel weighting
+        ref_mask = np.ones(n_words)
+        dists = np.array([
+            1.0 - (np.dot(m, ref_mask) / (np.linalg.norm(m) * np.linalg.norm(ref_mask) + 1e-9))
+            if m.sum() > 0 else 1.0
+            for m in masks
+        ])
+        kernel_width = 0.75
+        weights = np.exp(-(dists ** 2) / (kernel_width ** 2))
+
+        try:
+            ridge = Ridge(alpha=1.0)
+            ridge.fit(masks, targets, sample_weight=weights)
+            attributions = ridge.coef_.astype(float).tolist()
+            r_squared = float(ridge.score(masks, targets, sample_weight=weights))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Ridge fit failed: {e}") from e
+
+        torch.cuda.empty_cache()
+
+    return {
+        "method": "lime",
+        "words": words,
+        "attributions": attributions,
+        "reference_answer": ref_answer,
+        "reference_response": ref_response,
+        "n_samples": n_samples,
+        "r_squared": r_squared,
+    }
+
+
+@app.post("/posthoc/tokenshap")
+def posthoc_tokenshap(body: PostHocBody):
+    """
+    Word-level Shapley values via Monte Carlo coalition sampling.
+    Estimates each word's marginal contribution to keeping the answer correct.
+    """
+    tok, model = _resolve_model(body.model_id)
+    n_samples = max(20, min(int(body.n_samples or 50), 150))
+    max_new = min(int(body.max_new_tokens or 96), 256)
+
+    words = body.prompt.split()
+    n_words = len(words)
+    if n_words < 2:
+        raise HTTPException(status_code=400, detail="Prompt too short for TokenSHAP")
+
+    with _GEN_LOCK:
+        ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
+        ref_answer = _extract_final_answer(ref_response)
+
+        rng = np.random.default_rng(7)
+        marginal_sums = np.zeros(n_words, dtype=np.float64)
+        marginal_counts = np.zeros(n_words, dtype=np.int64)
+
+        coalition_cache: Dict[Tuple[int, ...], float] = {(): 0.0}
+
+        def value_of(coal_idx: Tuple[int, ...]) -> float:
+            if coal_idx in coalition_cache:
+                return coalition_cache[coal_idx]
+            if not coal_idx:
+                return 0.0
+            kept = [words[j] for j in coal_idx]
+            perturbed = " ".join(kept)
+            try:
+                resp = _short_generate(model, tok, perturbed, max_new=max_new)
+                ans = _extract_final_answer(resp)
+                v = 1.0 if (ans is not None and ans == ref_answer) else 0.0
+            except Exception:
+                v = 0.0
+            coalition_cache[coal_idx] = v
+            return v
+
+        # n_samples permutations × n_words marginals = many calls; cap by truncating early
+        max_calls = n_samples
+        calls_made = 0
+
+        for perm_i in range(n_samples):
+            perm = rng.permutation(n_words)
+            current: List[int] = []
+            prev_v = 0.0
+            for idx in perm:
+                if calls_made >= max_calls:
+                    break
+                current.append(int(idx))
+                key = tuple(sorted(current))
+                v = value_of(key)
+                calls_made += 1
+                marginal_sums[idx] += (v - prev_v)
+                marginal_counts[idx] += 1
+                prev_v = v
+            if calls_made >= max_calls:
+                break
+            if perm_i % 4 == 0:
+                torch.cuda.empty_cache()
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            shapley = np.where(marginal_counts > 0, marginal_sums / marginal_counts, 0.0)
+
+        torch.cuda.empty_cache()
+
+    return {
+        "method": "tokenshap",
+        "words": words,
+        "attributions": shapley.astype(float).tolist(),
+        "reference_answer": ref_answer,
+        "reference_response": ref_response,
+        "n_samples": int(calls_made),
+    }
+
+
+@app.post("/posthoc/counterfactual")
+def posthoc_counterfactual(body: PostHocBody):
+    """
+    Numeric-perturbation counterfactuals.
+    Finds the smallest edits that flip the model's final answer.
+    """
+    tok, model = _resolve_model(body.model_id)
+    max_new = min(int(body.max_new_tokens or 96), 256)
+
+    # Find every numeric span in the prompt (skip the empty 0-length matches)
+    spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
+    if not spans:
+        return {
+            "method": "counterfactual",
+            "reference_answer": None,
+            "reference_response": "",
+            "edits": [],
+            "note": "No numeric tokens in prompt — counterfactual generation skipped.",
+        }
+
+    def perturb(value: str) -> List[str]:
+        """Generate candidate replacements for a numeric token."""
+        out: List[str] = []
+        try:
+            if "." in value:
+                f = float(value)
+                out += [f"{f + 1:g}", f"{f - 1:g}", f"{f * 2:g}"]
+                if f != 0:
+                    out.append(f"{f / 2:g}")
+            else:
+                n = int(value)
+                out += [str(n + 1), str(n - 1), str(n * 2)]
+                if n != 0:
+                    out.append(str(n // 2 if n // 2 != 0 else 0))
+                if n > 1:
+                    out.append(str(n + 5))
+        except ValueError:
+            return []
+        # Dedupe while preserving order, drop the original value
+        seen = set()
+        deduped: List[str] = []
+        for c in out:
+            if c != value and c not in seen:
+                seen.add(c)
+                deduped.append(c)
+        return deduped[:3]  # cap candidates per span
+
+    with _GEN_LOCK:
+        ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
+        ref_answer = _extract_final_answer(ref_response)
+
+        edits: List[Dict[str, Any]] = []
+        # Iterate spans right-to-left so earlier offsets stay valid
+        for span_start, span_end, original in spans:
+            for cand in perturb(original):
+                new_prompt = body.prompt[:span_start] + cand + body.prompt[span_end:]
+                try:
+                    new_response = _short_generate(model, tok, new_prompt, max_new=max_new)
+                    new_answer = _extract_final_answer(new_response)
+                except Exception as e:
+                    new_response = f"[generation failed: {e}]"
+                    new_answer = None
+                flipped = (
+                    ref_answer is not None
+                    and new_answer is not None
+                    and new_answer != ref_answer
+                )
+                edits.append({
+                    "original_token": original,
+                    "replacement": cand,
+                    "position": span_start,
+                    "new_response": new_response,
+                    "new_answer": new_answer,
+                    "flipped": flipped,
+                })
+                torch.cuda.empty_cache()
+
+        torch.cuda.empty_cache()
+
+    # Sort: flipped edits first, then by closeness to original (Levenshtein-ish heuristic)
+    edits.sort(key=lambda e: (not e["flipped"], abs(len(e["replacement"]) - len(e["original_token"]))))
+
+    return {
+        "method": "counterfactual",
+        "reference_answer": ref_answer,
+        "reference_response": ref_response,
+        "edits": edits,
+        "n_edits": len(edits),
+        "n_flipped": sum(1 for e in edits if e["flipped"]),
+    }
 
 
 if __name__ == "__main__":

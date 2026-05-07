@@ -131,6 +131,11 @@ async def get_gradient_attribution_endpoint(request: ExplainRequest):
             prompt=request.prompt,
             response=response_text,
         )
-        return {"gradient_attribution": result["gradient_attribution"]}
+        return {
+            "gradient_attribution": result.get("gradient_attribution", []),
+            "position_predictions": result.get("position_predictions", []),
+            "layer_attention": result.get("layer_attention", []),
+            "tokens": result.get("tokens", []),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

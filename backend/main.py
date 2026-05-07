@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from routers import generation, models, explainability_remote
+from routers import generation, models, explainability_remote, posthoc
 
 app = FastAPI(title="LLM Explainability API", version="0.1.0")
 
@@ -20,6 +20,7 @@ app.add_middleware(
 app.include_router(models.router, prefix="/models", tags=["models"])
 app.include_router(generation.router, prefix="/generate", tags=["generation"])
 app.include_router(explainability_remote.router, prefix="/explain", tags=["explainability"])
+app.include_router(posthoc.router, prefix="/posthoc", tags=["posthoc"])
 
 
 @app.get("/health")

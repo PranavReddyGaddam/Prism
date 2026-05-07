@@ -111,3 +111,41 @@ async def get_gradient_attribution(model_id: str, prompt: str, response: str) ->
         )
         r.raise_for_status()
         return r.json()
+
+
+# ── Post-hoc analysis (LIME / TokenSHAP / Counterfactual) ────────────────────
+
+async def get_posthoc_lime(model_id: str, prompt: str, response: str = "", n_samples: int = 60) -> Dict:
+    if not MODEL_BASE_URL:
+        raise ValueError("MODEL_BASE_URL not set")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{MODEL_BASE_URL}/posthoc/lime",
+            json={"model_id": model_id, "prompt": prompt, "response": response, "n_samples": n_samples},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+async def get_posthoc_tokenshap(model_id: str, prompt: str, response: str = "", n_samples: int = 50) -> Dict:
+    if not MODEL_BASE_URL:
+        raise ValueError("MODEL_BASE_URL not set")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{MODEL_BASE_URL}/posthoc/tokenshap",
+            json={"model_id": model_id, "prompt": prompt, "response": response, "n_samples": n_samples},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+async def get_posthoc_counterfactual(model_id: str, prompt: str, response: str = "") -> Dict:
+    if not MODEL_BASE_URL:
+        raise ValueError("MODEL_BASE_URL not set")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{MODEL_BASE_URL}/posthoc/counterfactual",
+            json={"model_id": model_id, "prompt": prompt, "response": response},
+        )
+        r.raise_for_status()
+        return r.json()

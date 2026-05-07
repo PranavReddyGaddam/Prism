@@ -9,7 +9,18 @@ import {
   type GenerationResult,
 } from '@/components/ModelComparisonBento'
 import { COMPARISON_MODEL_TABS, type ComparisonModelId } from '@/modelSpecs'
-import type { AttributionGraph, AttributionNode, AttributionEdge } from '@/types/attribution'
+import {
+  buildAttributionGraph,
+  type PositionPrediction,
+  type LayerAttention,
+} from '@/lib/attributionGraph'
+import PostHocBento from '@/components/PostHocBento'
+import type {
+  PostHocSlot,
+  LimeResult,
+  TokenShapResult,
+  CounterfactualResult,
+} from '@/types/posthoc'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -18,130 +29,18 @@ const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http:
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function loadingSlot(): SlotState {
-  return { status: 'loading', result: null, explain: {}, graph: null }
+  return { status: 'loading', result: null, explain: {}, graph: null, rawAttribution: null }
 }
 
 function idleSlots(): Record<ComparisonModelId, SlotState> {
   return Object.fromEntries(
-    COMPARISON_MODEL_TABS.map((t) => [t.id, { status: 'idle', result: null, explain: {}, graph: null }]),
+    COMPARISON_MODEL_TABS.map((t) => [
+      t.id,
+      { status: 'idle', result: null, explain: {}, graph: null, rawAttribution: null },
+    ]),
   ) as Record<ComparisonModelId, SlotState>
 }
 
-interface PositionPrediction {
-  position: number
-  token: string
-  top: { token: string; probability: number; rank: number }[]
-  bottom: { token: string; probability: number; rank: number }[]
-}
-
-interface LayerAttention {
-  layer: number
-  weights: { token: string; weight: number }[]
-}
-
-function buildAttributionGraph(
-  prompt: string,
-  attrTokens: { token: string; score: number }[],
-  positionPredictions: PositionPrediction[],
-  layerAttention: LayerAttention[],
-): AttributionGraph {
-  const nodes: AttributionNode[] = []
-  const edges: AttributionEdge[] = []
-  const promptTokens = prompt.split(/\s+/).filter((w) => w.length > 0)
-
-  // Input nodes: top 8 tokens by attention-rollout score
-  const topInputs = [...attrTokens].sort((a, b) => b.score - a.score).slice(0, 8)
-  topInputs.forEach((t, i) => {
-    nodes.push({
-      id: `input-${i}`,
-      type: 'input',
-      label: t.token.trim() || `t${i}`,
-      layer: 0,
-      position: i,
-      activation: t.score,
-    })
-  })
-
-  // Intermediate nodes: one per attention layer bucket (sample every ~8 layers, pick 6)
-  const numLayers = layerAttention.length
-  const layerStep = Math.max(1, Math.floor(numLayers / 6))
-  const sampledLayers = Array.from({ length: 6 }, (_, k) => Math.min(k * layerStep, numLayers - 1))
-    .filter((v, i, arr) => arr.indexOf(v) === i)
-
-  sampledLayers.forEach((layerIdx, f) => {
-    const la = layerAttention[layerIdx]
-    // Build inputFeatures from the top attended tokens at this layer
-    const topWeights = [...(la?.weights ?? [])].sort((a, b) => b.weight - a.weight).slice(0, 5)
-    const activation = topWeights.length ? topWeights[0].weight : 0.5
-    nodes.push({
-      id: `feat-${f}`,
-      type: 'intermediate',
-      label: `Layer ${la?.layer ?? layerIdx}`,
-      layer: 1,
-      activation,
-      inputFeatures: topWeights.map((w) => ({ feature: w.token, weight: w.weight })),
-    })
-  })
-
-  // Output nodes: pick evenly-spaced positions from positionPredictions (prefer response half)
-  const halfIdx = Math.floor(positionPredictions.length / 2)
-  const responsePreds = positionPredictions.slice(halfIdx)
-  // Pick 5 positions spread across the response
-  const outputStep = Math.max(1, Math.floor(responsePreds.length / 5))
-  const outputPreds = Array.from({ length: 5 }, (_, k) => responsePreds[Math.min(k * outputStep, responsePreds.length - 1)])
-    .filter(Boolean)
-
-  outputPreds.forEach((pred, i) => {
-    const topToken = pred.top[0]
-    nodes.push({
-      id: `output-${i}`,
-      type: 'output',
-      label: topToken?.token?.trim() || pred.token.trim() || `o${i}`,
-      layer: 2,
-      position: pred.position,
-      probability: topToken?.probability ?? 0,
-      tokenPredictions: [
-        ...pred.top.map((p) => ({ token: p.token, logit: 0, probability: p.probability, rank: p.rank })),
-        ...pred.bottom.map((p) => ({ token: p.token, logit: 0, probability: p.probability, rank: p.rank + 100 })),
-      ],
-    })
-  })
-
-  // Edges: inputs → intermediate — weight by how much each input token is attended at that layer
-  const inputTokenSet = new Map(topInputs.map((t) => [t.token, t.score]))
-  sampledLayers.forEach((layerIdx, f) => {
-    const la = layerAttention[layerIdx]
-    topInputs.forEach((inp, i) => {
-      const layerWeight = la?.weights.find((w) => w.token === inp.token)?.weight ?? 0
-      const w = (inp.score + layerWeight) / 2
-      if (w > 0.05) {
-        edges.push({ source: `input-${i}`, target: `feat-${f}`, weight: w })
-      }
-    })
-  })
-
-  // Edges: intermediate → outputs — weight by output token probability scaled by layer activation
-  outputPreds.forEach((_, o) => {
-    sampledLayers.forEach((layerIdx, f) => {
-      const la = layerAttention[layerIdx]
-      const activation = la?.weights.length ? la.weights[0].weight : 0.3
-      edges.push({ source: `feat-${f}`, target: `output-${o}`, weight: activation })
-    })
-  })
-
-  const explainedBehavior = topInputs.reduce((s, t) => s + t.score, 0) / Math.max(attrTokens.length, 1)
-  void inputTokenSet
-
-  return {
-    nodes,
-    edges,
-    prompt,
-    promptTokens,
-    totalNodes: nodes.length,
-    totalEdges: edges.length,
-    explainedBehavior: Math.min(explainedBehavior, 1),
-  }
-}
 
 async function post(url: string, body: object) {
   const res = await fetch(url, {
@@ -199,7 +98,16 @@ async function fetchModelSlot(
     attribution: attrTokens,
   }
 
-  return { status: 'ready', result, explain, graph }
+  const rawAttribution = attrTokens.length > 0
+    ? {
+        gradientAttribution: attrTokens,
+        positionPredictions,
+        layerAttention,
+        prompt,
+      }
+    : null
+
+  return { status: 'ready', result, explain, graph, rawAttribution }
 }
 
 function errorSlot(tab: (typeof COMPARISON_MODEL_TABS)[number], message: string): SlotState {
@@ -214,6 +122,7 @@ function errorSlot(tab: (typeof COMPARISON_MODEL_TABS)[number], message: string)
     },
     explain: {},
     graph: null,
+    rawAttribution: null,
   }
 }
 
@@ -359,11 +268,65 @@ function ComparisonTable({ slots }: ComparisonTableProps) {
   )
 }
 
+// ── Post-hoc helpers ─────────────────────────────────────────────────────────
+
+type ParentTabId = 'mech' | 'posthoc'
+
+function idlePostHocSlots(): Record<ComparisonModelId, PostHocSlot> {
+  return Object.fromEntries(
+    COMPARISON_MODEL_TABS.map((t) => [
+      t.id,
+      { status: 'idle', lime: null, tokenshap: null, counterfactual: null } as PostHocSlot,
+    ]),
+  ) as Record<ComparisonModelId, PostHocSlot>
+}
+
+async function fetchPostHocSlot(
+  tab: (typeof COMPARISON_MODEL_TABS)[number],
+  prompt: string,
+  response: string,
+  onPartial: (patch: Partial<PostHocSlot>) => void,
+): Promise<void> {
+  // Fire all three sequentially; emit each piece as it lands so the UI can stream.
+  // Counterfactual first (cheapest, most demo-worthy), then LIME, then TokenSHAP.
+  try {
+    const cf = await post(`${API_BASE}/posthoc/counterfactual`, {
+      model_id: tab.id,
+      prompt,
+      response,
+    })
+    if (cf) onPartial({ counterfactual: cf as CounterfactualResult })
+  } catch { /* swallow individual failures */ }
+
+  try {
+    const lime = await post(`${API_BASE}/posthoc/lime`, {
+      model_id: tab.id,
+      prompt,
+      response,
+      n_samples: 60,
+    })
+    if (lime) onPartial({ lime: lime as LimeResult })
+  } catch { /* swallow */ }
+
+  try {
+    const ts = await post(`${API_BASE}/posthoc/tokenshap`, {
+      model_id: tab.id,
+      prompt,
+      response,
+      n_samples: 50,
+    })
+    if (ts) onPartial({ tokenshap: ts as TokenShapResult })
+  } catch { /* swallow */ }
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 function MainApp() {
   const [slots, setSlots] = useState<Record<ComparisonModelId, SlotState>>(idleSlots)
+  const [postHocSlots, setPostHocSlots] = useState<Record<ComparisonModelId, PostHocSlot>>(idlePostHocSlots)
   const [activeTab, setActiveTab] = useState<AllTabId>(COMPARISON_MODEL_TABS[0].id)
+  const [parentTab, setParentTab] = useState<ParentTabId>('mech')
+  const [lastPrompt, setLastPrompt] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
   const [showComparison, setShowComparison] = useState(false)
   const [infoBanner, setInfoBanner] = useState<string | null>(null)
@@ -376,13 +339,17 @@ function MainApp() {
     setInfoBanner(null)
     setShowComparison(true)
     setExpandedCard(null)
+    setLastPrompt(prompt)
     setSlots(
       Object.fromEntries(COMPARISON_MODEL_TABS.map((t) => [t.id, loadingSlot()])) as Record<
         ComparisonModelId,
         SlotState
       >,
     )
+    // Reset post-hoc — user must switch to the post-hoc tab to trigger fetches
+    setPostHocSlots(idlePostHocSlots())
     setActiveTab(COMPARISON_MODEL_TABS[0].id)
+    setParentTab('mech')
 
     setTimeout(() => {
       window.scrollTo({ top: window.innerHeight, behavior: 'smooth' })
@@ -407,6 +374,57 @@ function MainApp() {
           if (completed === COMPARISON_MODEL_TABS.length) setIsLoading(false)
         })
     })
+  }
+
+  const triggerPostHoc = (modelId: ComparisonModelId) => {
+    const current = postHocSlots[modelId]
+    if (current.status !== 'idle') return  // already fetching or done
+    const slot = slots[modelId]
+    if (!slot.result) return  // mech-interp must have completed first
+    if (!lastPrompt) return
+
+    const tab = COMPARISON_MODEL_TABS.find((t) => t.id === modelId)
+    if (!tab) return
+
+    setPostHocSlots((prev) => ({
+      ...prev,
+      [modelId]: { ...prev[modelId], status: 'loading' },
+    }))
+
+    const referenceResponse = slot.result.final_answer || slot.result.response
+
+    fetchPostHocSlot(tab, lastPrompt, referenceResponse, (patch) => {
+      setPostHocSlots((prev) => ({
+        ...prev,
+        [modelId]: { ...prev[modelId], ...patch, status: 'loading' },
+      }))
+    })
+      .then(() => {
+        setPostHocSlots((prev) => ({ ...prev, [modelId]: { ...prev[modelId], status: 'ready' } }))
+      })
+      .catch((err: Error) => {
+        setPostHocSlots((prev) => ({
+          ...prev,
+          [modelId]: { ...prev[modelId], status: 'error', error: err.message },
+        }))
+      })
+  }
+
+  const handleParentTabChange = (tab: ParentTabId) => {
+    setParentTab(tab)
+    if (tab === 'posthoc') {
+      // Fire post-hoc for the active model tab if it hasn't been computed
+      const modelTab: ComparisonModelId =
+        activeTab === 'comparison' ? COMPARISON_MODEL_TABS[0].id : activeTab
+      triggerPostHoc(modelTab)
+    }
+  }
+
+  const handleModelTabChange = (tab: AllTabId) => {
+    setActiveTab(tab)
+    if (parentTab === 'posthoc' && tab !== 'comparison') {
+      triggerPostHoc(tab)
+    }
   }
 
   const activeSlot = slots[activeModelTab]
@@ -446,13 +464,45 @@ function MainApp() {
 
         {(showComparison || isLoading) && (
           <div className="px-8 pt-0 pb-8 max-w-[1920px] mx-auto -mt-16">
+            {/* Parent tabs: Mechanistic Interpretability vs Post-hoc Analysis */}
+            <div
+              className="mb-3 flex w-full max-w-3xl mx-auto rounded-lg border border-gray-700/40 bg-black/30 p-1"
+              role="tablist"
+              aria-label="Analysis mode"
+            >
+              {([
+                { id: 'mech' as ParentTabId, label: 'Mechanistic Interpretability', subtitle: 'During the forward pass' },
+                { id: 'posthoc' as ParentTabId, label: 'Post-hoc Analysis', subtitle: 'After generation completes' },
+              ]).map((p) => {
+                const active = parentTab === p.id
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => handleParentTabChange(p.id)}
+                    className={`flex-1 rounded-md px-4 py-2.5 text-center transition-colors ${
+                      active
+                        ? 'bg-white/10 text-white'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold">{p.label}</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">{p.subtitle}</div>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Model sub-tabs */}
             <div
               className="mb-4 flex w-full border border-gray-600/50 bg-black/20"
               role="tablist"
               aria-label="Model comparison"
             >
               {COMPARISON_MODEL_TABS.map((tab) => {
-                const st = slots[tab.id]
+                const st = parentTab === 'posthoc' ? postHocSlots[tab.id] : slots[tab.id]
                 const active = activeTab === tab.id
                 return (
                   <button
@@ -460,7 +510,7 @@ function MainApp() {
                     type="button"
                     role="tab"
                     aria-selected={active}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => handleModelTabChange(tab.id)}
                     className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-3 py-3 text-center text-sm font-medium transition-colors box-border border-b-2 border-r border-gray-600/50 outline-none focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-white/30 focus-visible:ring-inset ${
                       active
                         ? 'border-b-white bg-gray-950 text-white'
@@ -477,31 +527,37 @@ function MainApp() {
                       )}
                       {st.status === 'ready' && <span className="text-emerald-500/90">ready</span>}
                       {st.status === 'idle' && <span className="text-gray-600">idle</span>}
+                      {st.status === 'error' && <span className="text-red-400/90">error</span>}
                     </span>
                   </button>
                 )
               })}
-              {/* Comparison tab */}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'comparison'}
-                onClick={() => setActiveTab('comparison')}
-                className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-3 py-3 text-center text-sm font-medium transition-colors box-border border-b-2 outline-none focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-white/30 focus-visible:ring-inset ${
-                  activeTab === 'comparison'
-                    ? 'border-b-white bg-gray-950 text-white'
-                    : 'border-b-transparent text-gray-500 hover:bg-gray-950/70 hover:text-gray-300'
-                }`}
-              >
-                <span className="truncate w-full px-1">Comparison</span>
-                <span className="text-[10px] font-normal text-gray-600">overview</span>
-              </button>
+              {parentTab === 'mech' && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'comparison'}
+                  onClick={() => handleModelTabChange('comparison')}
+                  className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-3 py-3 text-center text-sm font-medium transition-colors box-border border-b-2 outline-none focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-white/30 focus-visible:ring-inset ${
+                    activeTab === 'comparison'
+                      ? 'border-b-white bg-gray-950 text-white'
+                      : 'border-b-transparent text-gray-500 hover:bg-gray-950/70 hover:text-gray-300'
+                  }`}
+                >
+                  <span className="truncate w-full px-1">Comparison</span>
+                  <span className="text-[10px] font-normal text-gray-600">overview</span>
+                </button>
+              )}
             </div>
 
-            {activeTab !== 'comparison' ? (
+            {parentTab === 'mech' && activeTab !== 'comparison' && (
               <ModelComparisonBento slot={activeSlot} onExpandCard={(c) => setExpandedCard(c)} />
-            ) : (
+            )}
+            {parentTab === 'mech' && activeTab === 'comparison' && (
               <ComparisonTable slots={slots} />
+            )}
+            {parentTab === 'posthoc' && (
+              <PostHocBento slot={postHocSlots[activeModelTab]} />
             )}
           </div>
         )}

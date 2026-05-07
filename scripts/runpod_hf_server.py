@@ -371,14 +371,42 @@ def _resolve_model(model_id: str):
     return _load(path, _trust(trust_env))
 
 
+def _weighted_ridge(X: np.ndarray, y: np.ndarray, w: np.ndarray, alpha: float = 1.0):
+    """
+    Closed-form weighted ridge regression on a design matrix that includes
+    an intercept column. Returns (coef, intercept, r_squared) — no sklearn.
+
+    Solves: argmin_β  Σ wᵢ(yᵢ - Xβ)²  +  α‖β‖²   (intercept un-penalized)
+    """
+    n, d = X.shape
+    X_aug = np.hstack([np.ones((n, 1)), X])           # prepend intercept column
+    W = np.diag(w)
+    XtWX = X_aug.T @ W @ X_aug
+    # Penalty: skip the intercept (index 0)
+    pen = alpha * np.eye(d + 1)
+    pen[0, 0] = 0.0
+    try:
+        beta = np.linalg.solve(XtWX + pen, X_aug.T @ W @ y)
+    except np.linalg.LinAlgError:
+        beta = np.linalg.lstsq(XtWX + pen, X_aug.T @ W @ y, rcond=None)[0]
+    intercept = float(beta[0])
+    coef = beta[1:].astype(float)
+
+    # Weighted R²
+    y_pred = X_aug @ beta
+    y_mean = float((w * y).sum() / max(w.sum(), 1e-9))
+    ss_res = float((w * (y - y_pred) ** 2).sum())
+    ss_tot = float((w * (y - y_mean) ** 2).sum())
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+    return coef, intercept, r2
+
+
 @app.post("/posthoc/lime")
 def posthoc_lime(body: PostHocBody):
     """
-    Word-level LIME via random masking + Ridge regression.
+    Word-level LIME via random masking + closed-form weighted Ridge regression.
     Target: match (1.0/0.0) between perturbed answer and reference answer.
     """
-    from sklearn.linear_model import Ridge
-
     tok, model = _resolve_model(body.model_id)
     n_samples = max(20, min(int(body.n_samples or 60), 200))
     max_new = min(int(body.max_new_tokens or 96), 256)
@@ -394,10 +422,10 @@ def posthoc_lime(body: PostHocBody):
         ref_answer = _extract_final_answer(ref_response)
 
         rng = np.random.default_rng(42)
-        masks = rng.integers(0, 2, size=(n_samples, n_words))
-        masks[0] = np.ones(n_words, dtype=int)  # ensure full prompt is sample 0
+        masks = rng.integers(0, 2, size=(n_samples, n_words)).astype(np.float64)
+        masks[0] = np.ones(n_words, dtype=np.float64)  # sample 0 = full prompt
 
-        targets = np.zeros(n_samples, dtype=np.float32)
+        targets = np.zeros(n_samples, dtype=np.float64)
         for i in range(n_samples):
             kept = [w for w, k in zip(words, masks[i]) if k == 1]
             if not kept:
@@ -413,21 +441,19 @@ def posthoc_lime(body: PostHocBody):
             if i % 16 == 0:
                 torch.cuda.empty_cache()
 
-        # Cosine-distance kernel weighting
+        # Cosine-distance kernel weighting against the all-ones reference mask
         ref_mask = np.ones(n_words)
-        dists = np.array([
-            1.0 - (np.dot(m, ref_mask) / (np.linalg.norm(m) * np.linalg.norm(ref_mask) + 1e-9))
-            if m.sum() > 0 else 1.0
-            for m in masks
-        ])
+        ref_norm = np.linalg.norm(ref_mask) + 1e-9
+        dists = np.empty(n_samples)
+        for i, m in enumerate(masks):
+            mn = np.linalg.norm(m)
+            dists[i] = 1.0 - (np.dot(m, ref_mask) / (mn * ref_norm)) if mn > 0 else 1.0
         kernel_width = 0.75
         weights = np.exp(-(dists ** 2) / (kernel_width ** 2))
 
         try:
-            ridge = Ridge(alpha=1.0)
-            ridge.fit(masks, targets, sample_weight=weights)
-            attributions = ridge.coef_.astype(float).tolist()
-            r_squared = float(ridge.score(masks, targets, sample_weight=weights))
+            coef, _intercept, r_squared = _weighted_ridge(masks, targets, weights, alpha=1.0)
+            attributions = coef.tolist()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ridge fit failed: {e}") from e
 
@@ -440,7 +466,7 @@ def posthoc_lime(body: PostHocBody):
         "reference_answer": ref_answer,
         "reference_response": ref_response,
         "n_samples": n_samples,
-        "r_squared": r_squared,
+        "r_squared": float(r_squared),
     }
 
 
@@ -523,16 +549,20 @@ def posthoc_tokenshap(body: PostHocBody):
     }
 
 
+MAX_COUNTERFACTUAL_EDITS = 3
+
+
 @app.post("/posthoc/counterfactual")
 def posthoc_counterfactual(body: PostHocBody):
     """
     Numeric-perturbation counterfactuals.
-    Finds the smallest edits that flip the model's final answer.
+    Tries up to MAX_COUNTERFACTUAL_EDITS edits per request, one candidate per
+    numeric span (largest numbers first — they tend to be the most semantically
+    loaded). This keeps total forward passes per model bounded and predictable.
     """
     tok, model = _resolve_model(body.model_id)
     max_new = min(int(body.max_new_tokens or 96), 256)
 
-    # Find every numeric span in the prompt (skip the empty 0-length matches)
     spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
     if not spans:
         return {
@@ -543,67 +573,65 @@ def posthoc_counterfactual(body: PostHocBody):
             "note": "No numeric tokens in prompt — counterfactual generation skipped.",
         }
 
-    def perturb(value: str) -> List[str]:
-        """Generate candidate replacements for a numeric token."""
-        out: List[str] = []
+    def best_candidate(value: str) -> Optional[str]:
+        """Pick a single, sensible perturbation for one numeric token."""
         try:
             if "." in value:
                 f = float(value)
-                out += [f"{f + 1:g}", f"{f - 1:g}", f"{f * 2:g}"]
-                if f != 0:
-                    out.append(f"{f / 2:g}")
-            else:
-                n = int(value)
-                out += [str(n + 1), str(n - 1), str(n * 2)]
-                if n != 0:
-                    out.append(str(n // 2 if n // 2 != 0 else 0))
-                if n > 1:
-                    out.append(str(n + 5))
+                return f"{f + 1:g}" if f != -1 else f"{f + 2:g}"
+            n = int(value)
+            # Prefer +1 / -1 / *2 in that order; keep edits minimal & interpretable
+            for cand in (n + 1, n - 1, n * 2):
+                if cand != n:
+                    return str(cand)
         except ValueError:
-            return []
-        # Dedupe while preserving order, drop the original value
-        seen = set()
-        deduped: List[str] = []
-        for c in out:
-            if c != value and c not in seen:
-                seen.add(c)
-                deduped.append(c)
-        return deduped[:3]  # cap candidates per span
+            return None
+        return None
+
+    # Sort spans by the absolute magnitude of the number (largest first), then
+    # take the first MAX_COUNTERFACTUAL_EDITS spans — one perturbation each.
+    def magnitude(s):
+        try:
+            return abs(float(s[2]))
+        except ValueError:
+            return 0.0
+
+    selected_spans = sorted(spans, key=magnitude, reverse=True)[:MAX_COUNTERFACTUAL_EDITS]
 
     with _GEN_LOCK:
         ref_response = body.response or _short_generate(model, tok, body.prompt, max_new=max_new)
         ref_answer = _extract_final_answer(ref_response)
 
         edits: List[Dict[str, Any]] = []
-        # Iterate spans right-to-left so earlier offsets stay valid
-        for span_start, span_end, original in spans:
-            for cand in perturb(original):
-                new_prompt = body.prompt[:span_start] + cand + body.prompt[span_end:]
-                try:
-                    new_response = _short_generate(model, tok, new_prompt, max_new=max_new)
-                    new_answer = _extract_final_answer(new_response)
-                except Exception as e:
-                    new_response = f"[generation failed: {e}]"
-                    new_answer = None
-                flipped = (
-                    ref_answer is not None
-                    and new_answer is not None
-                    and new_answer != ref_answer
-                )
-                edits.append({
-                    "original_token": original,
-                    "replacement": cand,
-                    "position": span_start,
-                    "new_response": new_response,
-                    "new_answer": new_answer,
-                    "flipped": flipped,
-                })
-                torch.cuda.empty_cache()
+        for span_start, span_end, original in selected_spans:
+            cand = best_candidate(original)
+            if cand is None:
+                continue
+            new_prompt = body.prompt[:span_start] + cand + body.prompt[span_end:]
+            try:
+                new_response = _short_generate(model, tok, new_prompt, max_new=max_new)
+                new_answer = _extract_final_answer(new_response)
+            except Exception as e:
+                new_response = f"[generation failed: {e}]"
+                new_answer = None
+            flipped = (
+                ref_answer is not None
+                and new_answer is not None
+                and new_answer != ref_answer
+            )
+            edits.append({
+                "original_token": original,
+                "replacement": cand,
+                "position": span_start,
+                "new_response": new_response,
+                "new_answer": new_answer,
+                "flipped": flipped,
+            })
+            torch.cuda.empty_cache()
 
         torch.cuda.empty_cache()
 
-    # Sort: flipped edits first, then by closeness to original (Levenshtein-ish heuristic)
-    edits.sort(key=lambda e: (not e["flipped"], abs(len(e["replacement"]) - len(e["original_token"]))))
+    edits.sort(key=lambda e: not e["flipped"])  # flipped edits first
 
     return {
         "method": "counterfactual",

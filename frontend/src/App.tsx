@@ -296,27 +296,35 @@ async function fetchPostHocSlot(
       response,
     })
     if (cf) onPartial({ counterfactual: cf as CounterfactualResult })
-  } catch { /* swallow individual failures */ }
+  } catch (err) {
+    console.error(`[posthoc] counterfactual failed for ${tab.id}:`, err)
+  }
 
   try {
     const lime = await post(`${API_BASE}/posthoc/lime`, {
       model_id: tab.id,
       prompt,
       response,
-      n_samples: 60,
+      n_samples: 30,
     })
     if (lime) onPartial({ lime: lime as LimeResult })
-  } catch { /* swallow */ }
+  } catch (err) {
+    console.error(`[posthoc] LIME failed for ${tab.id}:`, err)
+    onPartial({ lime: { method: 'lime', words: [], attributions: [], reference_answer: null, reference_response: '', n_samples: 0, r_squared: 0 } as LimeResult })
+  }
 
   try {
     const ts = await post(`${API_BASE}/posthoc/tokenshap`, {
       model_id: tab.id,
       prompt,
       response,
-      n_samples: 50,
+      n_samples: 30,
     })
     if (ts) onPartial({ tokenshap: ts as TokenShapResult })
-  } catch { /* swallow */ }
+  } catch (err) {
+    console.error(`[posthoc] TokenSHAP failed for ${tab.id}:`, err)
+    onPartial({ tokenshap: { method: 'tokenshap', words: [], attributions: [], reference_answer: null, reference_response: '', n_samples: 0 } as TokenShapResult })
+  }
 }
 
 // ── App ──────────────────────────────────────────────────────────────────────

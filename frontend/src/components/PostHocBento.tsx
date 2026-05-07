@@ -54,7 +54,7 @@ function TopKBars({ words, attributions, k = 12 }: { words: string[]; attributio
           cursor={false}
           contentStyle={{ backgroundColor: '#181818', border: '1px solid #333', fontSize: 12 }}
           labelStyle={{ color: '#fff' }}
-          formatter={(v: number) => v.toFixed(4)}
+          formatter={(v: number | undefined) => (v ?? 0).toFixed(4)}
         />
         <Bar dataKey="score" radius={[0, 3, 3, 0]}>
           {data.map((d, i) => (
@@ -69,6 +69,9 @@ function TopKBars({ words, attributions, k = 12 }: { words: string[]; attributio
 // ── LIME card ────────────────────────────────────────────────────────────────
 
 function LimeCard({ data }: { data: LimeResult }) {
+  if (data.n_samples === 0) {
+    return <div className="text-sm text-red-400 p-3">LIME computation failed — check pod logs.</div>
+  }
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-4 text-xs">
@@ -97,6 +100,9 @@ function LimeCard({ data }: { data: LimeResult }) {
 // ── TokenSHAP card ───────────────────────────────────────────────────────────
 
 function TokenShapCard({ data }: { data: TokenShapResult }) {
+  if (data.n_samples === 0) {
+    return <div className="text-sm text-red-400 p-3">TokenSHAP computation failed — check pod logs.</div>
+  }
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-4 text-xs">

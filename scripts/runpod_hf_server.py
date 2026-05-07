@@ -408,8 +408,8 @@ def posthoc_lime(body: PostHocBody):
     Target: match (1.0/0.0) between perturbed answer and reference answer.
     """
     tok, model = _resolve_model(body.model_id)
-    n_samples = max(20, min(int(body.n_samples or 60), 200))
-    max_new = min(int(body.max_new_tokens or 96), 256)
+    n_samples = max(10, min(int(body.n_samples or 30), 100))
+    max_new = min(int(body.max_new_tokens or 64), 128)
 
     words = body.prompt.split()
     n_words = len(words)
@@ -477,8 +477,8 @@ def posthoc_tokenshap(body: PostHocBody):
     Estimates each word's marginal contribution to keeping the answer correct.
     """
     tok, model = _resolve_model(body.model_id)
-    n_samples = max(20, min(int(body.n_samples or 50), 150))
-    max_new = min(int(body.max_new_tokens or 96), 256)
+    n_samples = max(10, min(int(body.n_samples or 30), 100))
+    max_new = min(int(body.max_new_tokens or 64), 128)
 
     words = body.prompt.split()
     n_words = len(words)
@@ -561,7 +561,7 @@ def posthoc_counterfactual(body: PostHocBody):
     loaded). This keeps total forward passes per model bounded and predictable.
     """
     tok, model = _resolve_model(body.model_id)
-    max_new = min(int(body.max_new_tokens or 96), 256)
+    max_new = min(int(body.max_new_tokens or 64), 128)
 
     spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
     if not spans:

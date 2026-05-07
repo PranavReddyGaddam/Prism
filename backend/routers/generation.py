@@ -11,7 +11,7 @@ VALID_MODEL_IDS = set(MODEL_CONFIGS.keys())
 class GenerationRequest(BaseModel):
     model_id: str
     prompt: str
-    max_new_tokens: int = 512
+    max_new_tokens: int = 256
 
 
 class GenerationResponse(BaseModel):

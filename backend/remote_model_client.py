@@ -18,7 +18,7 @@ def format_math_prompt(problem: str) -> str:
     return f"### Problem:\n{problem}\n### Solution:\n"
 
 
-async def get_model_response(model_id: str, prompt: str, max_new_tokens: int = 512) -> Dict:
+async def get_model_response(model_id: str, prompt: str, max_new_tokens: int = 256) -> Dict:
     """Call POST /generate on the RunPod bridge for any of the four math models."""
     if not MODEL_BASE_URL:
         raise ValueError("MODEL_BASE_URL environment variable not set")

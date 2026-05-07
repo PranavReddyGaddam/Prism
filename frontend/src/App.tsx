@@ -59,7 +59,7 @@ async function fetchModelSlot(
   const res = await fetch(`${API_BASE}/generate/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model_id: tab.id, prompt, max_new_tokens: 512 }),
+    body: JSON.stringify({ model_id: tab.id, prompt, max_new_tokens: 256 }),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => `HTTP ${res.status}`)

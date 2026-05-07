@@ -118,7 +118,7 @@ def generate(body: GenerateBody):
 
     with _GEN_LOCK:
         tok, model = _load(path, _trust(trust_env))
-        max_new = min(int(body.max_new_tokens or 512), 4096)
+        max_new = min(int(body.max_new_tokens or 256), 256)
         pad = tok.pad_token_id or tok.eos_token_id
         inputs = tok(body.prompt, return_tensors="pt")
         inputs = {k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device) for k, v in inputs.items()}

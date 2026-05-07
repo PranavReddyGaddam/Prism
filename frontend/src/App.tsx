@@ -333,7 +333,11 @@ function MainApp() {
         })
         .catch((err: Error) => {
           setSlots((prev) => ({ ...prev, [tab.id]: errorSlot(tab, err.message) }))
-          setInfoBanner(`One or more models failed — is the backend running and MODEL_BASE_URL set?`)
+          const is524 = err.message.includes('524')
+          setInfoBanner(is524
+            ? 'Request timed out — models may still be loading on the pod. Try again in 30s.'
+            : 'One or more models failed — is the backend running and MODEL_BASE_URL set?'
+          )
         })
         .finally(() => {
           completed += 1

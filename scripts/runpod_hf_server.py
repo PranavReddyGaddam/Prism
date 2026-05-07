@@ -113,10 +113,26 @@ class ExplainBody(BaseModel):
     response: Optional[str] = None
 
 
+@app.on_event("startup")
+def preload_models():
+    """Load all configured models into GPU on startup so first request doesn't cold-start."""
+    for mid, (penv, tenv) in MODEL_ENV.items():
+        path = os.getenv(penv, "").strip()
+        if path:
+            try:
+                print(f"[startup] preloading {mid} from {path} …")
+                _load(path, _trust(tenv))
+                torch.cuda.empty_cache()
+                print(f"[startup] {mid} ready")
+            except Exception as e:
+                print(f"[startup] WARNING: failed to preload {mid}: {e}")
+
+
 @app.get("/health")
 def health():
     configured = [mid for mid, (penv, _) in MODEL_ENV.items() if os.getenv(penv, "").strip()]
-    return {"status": "ok", "models_configured": configured}
+    loaded = [mid for mid, (penv, _) in MODEL_ENV.items() if os.getenv(penv, "").strip() and os.getenv(penv, "").strip() in _cache]
+    return {"status": "ok", "models_configured": configured, "models_loaded": loaded}
 
 
 @app.post("/generate")

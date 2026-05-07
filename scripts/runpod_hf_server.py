@@ -134,31 +134,111 @@ def generate(body: GenerateBody):
     return {"model_id": body.model_id, "response": text}
 
 
-# --- Explainability stubs — return empty payloads until implemented ---
+def _resolve(body: ExplainBody):
+    if body.model_id not in MODEL_ENV:
+        raise HTTPException(status_code=400, detail=f"Unknown model_id {body.model_id!r}")
+    path_env, trust_env = MODEL_ENV[body.model_id]
+    path = os.getenv(path_env, "").strip()
+    if not path:
+        raise HTTPException(status_code=500, detail=f"{path_env} not set")
+    return _load(path, _trust(trust_env))
+
+
+def _encode(tok, model, text: str):
+    enc = tok(text, return_tensors="pt")
+    return {k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device)
+            for k, v in enc.items()}
+
 
 @app.post("/explain/confidence")
-def ex_confidence(_: ExplainBody):
-    return {"token_confidence": []}
-
-
-@app.post("/explain/logit-lens")
-def ex_logit(_: ExplainBody):
-    return {"logit_lens": []}
+def ex_confidence(body: ExplainBody):
+    tok, model = _resolve(body)
+    full = (body.prompt + " " + body.response) if body.response else body.prompt
+    with _GEN_LOCK:
+        inputs = _encode(tok, model, full)
+        with torch.inference_mode():
+            out = model(**inputs)
+        logits = out.logits[0]  # (seq, vocab)
+        probs = torch.softmax(logits, dim=-1)
+        ids = inputs["input_ids"][0]
+        token_confidence = []
+        for i, tok_id in enumerate(ids[1:], start=1):
+            conf = probs[i - 1, tok_id].item()
+            token_confidence.append({"token": tok.decode([tok_id.item()]), "confidence": conf})
+    return {"token_confidence": token_confidence}
 
 
 @app.post("/explain/hidden-states")
-def ex_hidden(_: ExplainBody):
-    return {"hidden_state_norms": []}
+def ex_hidden(body: ExplainBody):
+    tok, model = _resolve(body)
+    with _GEN_LOCK:
+        inputs = _encode(tok, model, body.prompt)
+        with torch.inference_mode():
+            out = model(**inputs, output_hidden_states=True)
+        hidden_state_norms = [
+            {"layer": i, "norm": hs[0].float().norm(dim=-1).mean().item()}
+            for i, hs in enumerate(out.hidden_states)
+        ]
+    return {"hidden_state_norms": hidden_state_norms}
+
+
+@app.post("/explain/logit-lens")
+def ex_logit(body: ExplainBody):
+    tok, model = _resolve(body)
+    with _GEN_LOCK:
+        inputs = _encode(tok, model, body.prompt)
+        with torch.inference_mode():
+            out = model(**inputs, output_hidden_states=True)
+        lm_head = model.lm_head
+        logit_lens = []
+        for layer_i, hs in enumerate(out.hidden_states):
+            layer_logits = lm_head(hs[0].to(lm_head.weight.dtype))
+            layer_probs = torch.softmax(layer_logits, dim=-1)
+            for pos in range(min(5, hs.shape[1])):
+                top_id = layer_probs[pos].argmax().item()
+                top_prob = layer_probs[pos, top_id].item()
+                logit_lens.append({
+                    "layer": layer_i,
+                    "word_position": pos,
+                    "predicted_token": tok.decode([top_id]),
+                    "probability": top_prob,
+                })
+    return {"logit_lens": logit_lens}
 
 
 @app.post("/explain/attribution")
-def ex_attr(_: ExplainBody):
-    return {"gradient_attribution": []}
+def ex_attr(body: ExplainBody):
+    tok, model = _resolve(body)
+    full = (body.prompt + " " + body.response) if body.response else body.prompt
+    with _GEN_LOCK:
+        enc = tok(full, return_tensors="pt")
+        input_ids = enc["input_ids"].to(model.device)
+        embeds = model.get_input_embeddings()(input_ids).detach().requires_grad_(True)
+        attention_mask = enc.get("attention_mask")
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(model.device)
+        out = model(inputs_embeds=embeds.to(model.dtype), attention_mask=attention_mask)
+        loss = out.logits[0, :-1].softmax(-1).max(-1).values.mean()
+        loss.backward()
+        scores = embeds.grad[0].float().norm(dim=-1)
+        scores = (scores / scores.max()).tolist()
+        tokens = [tok.decode([i]) for i in input_ids[0].tolist()]
+        gradient_attribution = [{"token": t, "score": s} for t, s in zip(tokens, scores)]
+    return {"gradient_attribution": gradient_attribution}
 
 
 @app.post("/explain/attention")
-def ex_attn(_: ExplainBody):
-    return {"tokens": [], "matrix": [], "layer": 0, "head": 0}
+def ex_attn(body: ExplainBody):
+    tok, model = _resolve(body)
+    layer = 0
+    head = 0
+    with _GEN_LOCK:
+        inputs = _encode(tok, model, body.prompt)
+        with torch.inference_mode():
+            out = model(**inputs, output_attentions=True)
+        attn = out.attentions[layer][0, head].float().tolist()
+        tokens = [tok.decode([i]) for i in inputs["input_ids"][0].tolist()]
+    return {"tokens": tokens, "matrix": attn, "layer": layer, "head": head}
 
 
 if __name__ == "__main__":

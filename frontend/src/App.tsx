@@ -26,6 +26,16 @@ function idleSlots(): Record<ComparisonModelId, SlotState> {
   ) as Record<ComparisonModelId, SlotState>
 }
 
+async function post(url: string, body: object) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) return null
+  return res.json()
+}
+
 async function fetchModelSlot(
   tab: (typeof COMPARISON_MODEL_TABS)[number],
   prompt: string,
@@ -47,7 +57,23 @@ async function fetchModelSlot(
     final_answer: data.final_answer ?? data.response ?? '',
     token_count: data.token_count ?? 0,
   }
-  return { status: 'ready', result, explain: {}, graph: null }
+  const response = result.final_answer || result.response
+
+  const [confData, hiddenData, logitData, attrData] = await Promise.all([
+    post(`${API_BASE}/explain/confidence`, { model_id: tab.id, prompt, response }),
+    post(`${API_BASE}/explain/hidden-states`, { model_id: tab.id, prompt }),
+    post(`${API_BASE}/explain/logit-lens`, { model_id: tab.id, prompt, response }),
+    post(`${API_BASE}/explain/attribution`, { model_id: tab.id, prompt, response }),
+  ])
+
+  const explain = {
+    confidence: confData?.token_confidence ?? [],
+    hiddenStates: hiddenData?.hidden_state_norms ?? [],
+    logitLens: logitData?.logit_lens ?? [],
+    attribution: attrData?.gradient_attribution ?? [],
+  }
+
+  return { status: 'ready', result, explain, graph: null }
 }
 
 function errorSlot(tab: (typeof COMPARISON_MODEL_TABS)[number], message: string): SlotState {

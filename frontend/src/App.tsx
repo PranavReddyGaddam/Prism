@@ -305,7 +305,7 @@ async function fetchPostHocSlot(
       model_id: tab.id,
       prompt,
       response,
-      n_samples: 30,
+      n_samples: 20,
     })
     if (lime) onPartial({ lime: lime as LimeResult })
   } catch (err) {
@@ -318,7 +318,7 @@ async function fetchPostHocSlot(
       model_id: tab.id,
       prompt,
       response,
-      n_samples: 30,
+      n_samples: 20,
     })
     if (ts) onPartial({ tokenshap: ts as TokenShapResult })
   } catch (err) {

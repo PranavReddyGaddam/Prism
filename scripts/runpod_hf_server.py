@@ -330,15 +330,27 @@ class PostHocBody(BaseModel):
 
 _FINAL_NUMBER_RE = re.compile(r"\\boxed\s*\{\s*([+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
 _ANY_NUMBER_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+# Matches "answer is 12", "= 12", "therefore 12", etc. near the end of a response
+_ANSWER_PHRASE_RE = re.compile(
+    r"(?:answer(?:\s+is)?|therefore|thus|so|=)\s*([+-]?\d+(?:\.\d+)?)\s*[.\n]?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _extract_final_answer(text: str) -> Optional[str]:
     if not text:
         return None
+    # 1. Prefer \boxed{} — most reliable final answer marker
     m = _FINAL_NUMBER_RE.search(text)
     if m:
         return m.group(1)
-    nums = _ANY_NUMBER_RE.findall(text)
+    # 2. Answer phrase at the end of text
+    m = _ANSWER_PHRASE_RE.search(text)
+    if m:
+        return m.group(1)
+    # 3. Last number in the final 80 characters only — avoids mid-reasoning leakage
+    tail = text[-80:]
+    nums = _ANY_NUMBER_RE.findall(tail)
     return nums[-1] if nums else None
 
 
@@ -424,7 +436,7 @@ def posthoc_lime(body: PostHocBody):
     """
     tok, model = _resolve_model(body.model_id)
     n_samples = max(6, min(int(body.n_samples or 16), 24))
-    max_new = min(int(body.max_new_tokens or 48), 64)
+    max_new = min(int(body.max_new_tokens or 96), 128)
 
     raw_problem = _unwrap_prompt(body.prompt)
     words = raw_problem.split()
@@ -494,7 +506,7 @@ def posthoc_tokenshap(body: PostHocBody):
     """
     tok, model = _resolve_model(body.model_id)
     n_samples = max(6, min(int(body.n_samples or 16), 24))
-    max_new = min(int(body.max_new_tokens or 48), 64)
+    max_new = min(int(body.max_new_tokens or 96), 128)
 
     raw_problem = _unwrap_prompt(body.prompt)
     words = raw_problem.split()

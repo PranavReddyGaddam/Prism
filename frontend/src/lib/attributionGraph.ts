@@ -27,8 +27,16 @@ export function buildAttributionGraph(
   const edges: AttributionEdge[] = []
   const promptTokens = prompt.split(/\s+/).filter((w) => w.length > 0)
 
-  // Input nodes: top 8 tokens by attention-rollout score
-  const topInputs = [...attrTokens].sort((a, b) => b.score - a.score).slice(0, 8)
+  // Filter out prompt-format tokens that dominate attribution scores but carry no semantic meaning
+  const FORMAT_TOKENS = new Set(['###', 'Problem', 'Solution', ':\n', '##', '#'])
+  const semanticTokens = attrTokens.filter(t => !FORMAT_TOKENS.has(t.token.trim()))
+
+  // Normalize scores to [0,1] relative to the max among semantic tokens
+  const maxScore = Math.max(...semanticTokens.map(t => t.score), 1e-9)
+  const normalizedTokens = semanticTokens.map(t => ({ ...t, score: t.score / maxScore }))
+
+  // Input nodes: top 8 semantic tokens by normalized score
+  const topInputs = [...normalizedTokens].sort((a, b) => b.score - a.score).slice(0, 8)
   topInputs.forEach((t, i) => {
     nodes.push({
       id: `input-${i}`,
@@ -87,13 +95,24 @@ export function buildAttributionGraph(
     })
   })
 
+  // Normalise layer attention weights per layer so all inputs get meaningful edge weights
+  const normalisedLayerWeights = layerAttention.map(la => {
+    const max = Math.max(...(la?.weights ?? []).map(w => w.weight), 1e-9)
+    return {
+      layer: la?.layer,
+      weights: (la?.weights ?? []).map(w => ({ token: w.token.trim(), weight: w.weight / max })),
+    }
+  })
+
   // Edges: inputs → intermediate, weighted by attention at that layer
   sampledLayers.forEach((layerIdx, f) => {
-    const la = layerAttention[layerIdx]
+    const la = normalisedLayerWeights[layerIdx]
     topInputs.forEach((inp, i) => {
-      const layerWeight = la?.weights.find((w) => w.token === inp.token)?.weight ?? 0
+      const inpLabel = inp.token.trim()
+      const layerWeight = la?.weights.find((w) => w.token === inpLabel)?.weight ?? inp.score * 0.3
       const w = (inp.score + layerWeight) / 2
-      if (w > 0.05) {
+      // Use a relative threshold so low-score tokens still get edges
+      if (w > 0.01) {
         edges.push({ source: `input-${i}`, target: `feat-${f}`, weight: w })
       }
     })

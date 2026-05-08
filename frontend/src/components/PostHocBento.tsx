@@ -51,12 +51,13 @@ function TopKBars({ words, attributions, k = 12 }: { words: string[]; attributio
       <ResponsiveContainer width="100%" height={Math.max(220, data.length * 26)}>
         <BarChart data={data} layout="vertical" margin={{ left: 20, right: 30, top: 4, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-          <XAxis type="number" stroke="rgba(255,255,255,0.4)" fontSize={10} tickLine={false} />
-          <YAxis type="category" dataKey="word" stroke="rgba(255,255,255,0.6)" fontSize={11} width={100} tickLine={false} axisLine={false} />
+          <XAxis type="number" stroke="rgba(255,255,255,0.4)" fontSize={10} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.6)' }} />
+          <YAxis type="category" dataKey="word" stroke="rgba(255,255,255,0.6)" fontSize={11} width={100} tickLine={false} axisLine={false} tick={{ fill: 'rgba(255,255,255,0.85)' }} />
           <Tooltip
             cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
+            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12, color: '#fff' }}
             labelStyle={{ color: '#fff' }}
+            itemStyle={{ color: '#fff' }}
             formatter={(v: number | undefined) => [(v ?? 0).toFixed(4), 'score']}
           />
           <Bar dataKey="score" radius={[0, 3, 3, 0]}>
@@ -80,13 +81,13 @@ function LimeCard({ data }: { data: LimeResult }) {
     <div className="space-y-3">
       <div className="flex items-center gap-4 text-xs">
         <span className="text-gray-500">
-          Reference answer: <span className="text-white font-mono">{data.reference_answer ?? '—'}</span>
+          Reference answer: <span style={{ color: '#fff' }} className="font-mono">{data.reference_answer ?? '—'}</span>
         </span>
         <span className="text-gray-500">
-          R<sup>2</sup>: <span className="text-white font-mono">{data.r_squared.toFixed(3)}</span>
+          R<sup style={{ color: '#9ca3af' }}>2</sup>: <span style={{ color: '#fff' }} className="font-mono">{data.r_squared.toFixed(3)}</span>
         </span>
         <span className="text-gray-500">
-          Samples: <span className="text-white font-mono">{data.n_samples}</span>
+          Samples: <span style={{ color: '#fff' }} className="font-mono">{data.n_samples}</span>
         </span>
       </div>
       <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
@@ -111,10 +112,10 @@ function TokenShapCard({ data }: { data: TokenShapResult }) {
     <div className="space-y-3">
       <div className="flex items-center gap-4 text-xs">
         <span className="text-gray-500">
-          Reference answer: <span className="text-white font-mono">{data.reference_answer ?? '—'}</span>
+          Reference answer: <span style={{ color: '#fff' }} className="font-mono">{data.reference_answer ?? '—'}</span>
         </span>
         <span className="text-gray-500">
-          Coalitions evaluated: <span className="text-white font-mono">{data.n_samples}</span>
+          Coalitions evaluated: <span style={{ color: '#fff' }} className="font-mono">{data.n_samples}</span>
         </span>
       </div>
       <div className="rounded-lg p-3" style={{ backgroundColor: INNER_BG, border: BORDER }}>
@@ -146,13 +147,13 @@ function CounterfactualCard({ data }: { data: CounterfactualResult }) {
     <div className="space-y-3">
       <div className="flex items-center gap-4 text-xs">
         <span className="text-gray-500">
-          Reference answer: <span className="text-white font-mono">{data.reference_answer ?? '—'}</span>
+          Reference answer: <span style={{ color: '#fff' }} className="font-mono">{data.reference_answer ?? '—'}</span>
         </span>
         <span className="text-gray-500">
-          Edits tried: <span className="text-white font-mono">{data.n_edits}</span>
+          Edits tried: <span style={{ color: '#fff' }} className="font-mono">{data.n_edits}</span>
         </span>
         <span className="text-gray-500">
-          Flipped: <span className="text-emerald-400 font-mono">{data.n_flipped}</span>
+          Flipped: <span style={{ color: '#34d399' }} className="font-mono">{data.n_flipped}</span>
         </span>
       </div>
 

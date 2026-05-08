@@ -11,14 +11,8 @@
  */
 
 import { ArrowRight, ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { useAutoResizeTextarea } from "@/hooks/use-auto-resize-textarea";
 import { cn } from "@/lib/utils";
@@ -26,6 +20,19 @@ import { cn } from "@/lib/utils";
 
 export default function AI_Prompt({ onSubmit }: { onSubmit?: (prompt: string) => void }) {
   const [value, setValue] = useState("");
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
     minHeight: 72,
     maxHeight: 300,
@@ -88,28 +95,48 @@ export default function AI_Prompt({ onSubmit }: { onSubmit?: (prompt: string) =>
             <div className="flex h-14 items-center rounded-b-xl bg-black border-t border-gray-800">
               <div className="absolute right-3 bottom-3 left-3 flex w-[calc(100%-24px)] items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        className="flex h-8 items-center gap-1 rounded-md pr-2 pl-1 text-xs text-white hover:bg-gray-900 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-0"
-                        variant="ghost"
+                  <div className="relative" ref={dropdownRef}>
+                    <Button
+                      className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-gray-400 hover:text-white hover:bg-white/5 focus-visible:ring-0 border border-transparent hover:border-white/10 transition-all"
+                      variant="ghost"
+                      onClick={() => setOpen(o => !o)}
+                      type="button"
+                    >
+                      <span>Sample question</span>
+                      <ChevronDown className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-180")} />
+                    </Button>
+                    {open && (
+                      <div
+                        className="absolute bottom-full left-0 mb-2 z-50 rounded-xl overflow-hidden"
+                        style={{
+                          width: '480px',
+                          backgroundColor: '#141414',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          boxShadow: '0 -8px 32px rgba(0,0,0,0.6)',
+                        }}
                       >
-                        <span>Question</span>
-                        <ChevronDown className="h-3 w-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="bg-black border-gray-800">
-                      {COT_QUESTIONS.map((question) => (
-                        <DropdownMenuItem
-                          key={question}
-                          className="text-white hover:bg-gray-900 focus:bg-gray-900 cursor-pointer"
-                          onClick={() => setValue(question)}
-                        >
-                          <span className="text-sm">{question}</span>
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        <div className="px-3 py-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                          <span className="text-[10px] uppercase tracking-widest" style={{ color: '#6b7280' }}>Sample questions</span>
+                        </div>
+                        <div className="overflow-y-auto" style={{ maxHeight: '280px' }}>
+                          {COT_QUESTIONS.map((question, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              className="w-full text-left px-3 py-2.5 text-sm transition-colors"
+                              style={{ color: '#d1d5db', borderBottom: '1px solid rgba(255,255,255,0.04)' }}
+                              onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)')}
+                              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                              onClick={() => { setValue(question); setOpen(false); adjustHeight(); }}
+                            >
+                              <span className="text-[10px] font-mono mr-2" style={{ color: '#4b5563' }}>{String(i + 1).padStart(2, '0')}</span>
+                              {question}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <button
                   aria-label="Send message"

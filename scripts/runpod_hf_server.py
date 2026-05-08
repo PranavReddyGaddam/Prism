@@ -453,6 +453,11 @@ def posthoc_lime(body: PostHocBody):
         masks = rng.integers(0, 2, size=(n_samples, n_words)).astype(np.float64)
         masks[0] = np.ones(n_words, dtype=np.float64)  # sample 0 = full prompt
 
+        try:
+            ref_val = float(ref_answer) if ref_answer is not None else None
+        except ValueError:
+            ref_val = None
+
         targets = np.zeros(n_samples, dtype=np.float64)
         for i in range(n_samples):
             kept = [w for w, k in zip(words, masks[i]) if k == 1]
@@ -463,7 +468,15 @@ def posthoc_lime(body: PostHocBody):
             try:
                 resp = _short_generate(model, tok, perturbed_prompt, max_new=max_new)
                 ans = _extract_final_answer(resp)
-                targets[i] = 1.0 if (ans is not None and ans == ref_answer) else 0.0
+                if ref_val is not None and ans is not None:
+                    try:
+                        # Continuous target: 1 - |perturbed - ref| / (|ref| + 1)
+                        # Full prompt → target≈1, wrong answer → target<1, no answer → 0
+                        targets[i] = max(0.0, 1.0 - abs(float(ans) - ref_val) / (abs(ref_val) + 1.0))
+                    except ValueError:
+                        targets[i] = 1.0 if ans == ref_answer else 0.0
+                else:
+                    targets[i] = 1.0 if (ans is not None and ans == ref_answer) else 0.0
             except Exception:
                 targets[i] = 0.0
             if i % 16 == 0:
@@ -517,6 +530,10 @@ def posthoc_tokenshap(body: PostHocBody):
     with _GEN_LOCK:
         ref_response = body.response or _short_generate(model, tok, _wrap_prompt(raw_problem), max_new=max_new)
         ref_answer = _extract_final_answer(ref_response)
+        try:
+            ref_val = float(ref_answer) if ref_answer is not None else None
+        except ValueError:
+            ref_val = None
 
         rng = np.random.default_rng(7)
         marginal_sums = np.zeros(n_words, dtype=np.float64)
@@ -534,7 +551,13 @@ def posthoc_tokenshap(body: PostHocBody):
             try:
                 resp = _short_generate(model, tok, perturbed, max_new=max_new)
                 ans = _extract_final_answer(resp)
-                v = 1.0 if (ans is not None and ans == ref_answer) else 0.0
+                if ref_val is not None and ans is not None:
+                    try:
+                        v = max(0.0, 1.0 - abs(float(ans) - ref_val) / (abs(ref_val) + 1.0))
+                    except ValueError:
+                        v = 1.0 if ans == ref_answer else 0.0
+                else:
+                    v = 1.0 if (ans is not None and ans == ref_answer) else 0.0
             except Exception:
                 v = 0.0
             coalition_cache[coal_idx] = v

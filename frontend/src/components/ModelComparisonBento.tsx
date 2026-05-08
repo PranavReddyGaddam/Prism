@@ -3,7 +3,7 @@ import AttributionGraphVisualization from '@/components/visualizations/Attributi
 import NodeDetailPanel from '@/components/visualizations/NodeDetailPanel'
 import TokenFlow from '@/components/visualizations/TokenFlow'
 import type { AttributionGraph, AttributionNode } from '@/types/attribution'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { buildAttributionGraph, DEFAULT_MAX_LAYERS, DEFAULT_MAX_OUTPUTS } from '@/lib/attributionGraph'
 
 export type SlotStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -36,6 +36,8 @@ export interface GradientAttribution {
 export interface HiddenStateNorm {
   layer: number
   norm: number
+  delta?: number
+  token_norms?: number[]
 }
 
 export interface ExplainData {
@@ -63,6 +65,7 @@ export interface SlotState {
   explain: Partial<ExplainData>
   graph: AttributionGraph | null
   rawAttribution: RawAttribution | null
+  hiddenTokens?: string[]
 }
 
 interface ModelComparisonBentoProps {
@@ -328,6 +331,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
   const [closing, setClosing] = useState(false)
   const [maxLayers, setMaxLayers] = useState(DEFAULT_MAX_LAYERS)
   const [maxOutputs, setMaxOutputs] = useState(DEFAULT_MAX_OUTPUTS)
+  const [selectedLayer, setSelectedLayer] = useState<number | null>(null)
 
   const totalLayers = slot.rawAttribution?.layerAttention.length ?? 0
   const totalOutputs = slot.rawAttribution
@@ -470,76 +474,136 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
           )}
           {expandedCard === 'hidden' && explainData.hiddenStates && explainData.hiddenStates.length > 0 && (() => {
             const data = explainData.hiddenStates
+            const hiddenTokens = slot.hiddenTokens ?? []
             const maxNorm = Math.max(...data.map((d) => d.norm))
-            const minNorm = Math.min(...data.map((d) => d.norm))
             const avgNorm = data.reduce((sum, d) => sum + d.norm, 0) / data.length
+            const maxDelta = Math.max(...data.map(d => d.delta ?? 0), 1e-9)
+
+            const selectedLayerData = selectedLayer !== null ? data.find(d => d.layer === selectedLayer) : null
+            const tokenNorms = selectedLayerData?.token_norms ?? []
+            const maxTokenNorm = Math.max(...tokenNorms, 1e-9)
 
             return (
               <div className="space-y-6">
-                <div className="grid grid-cols-4 gap-4">
-                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                    <div className="text-xs text-gray-500 mb-1">Total Layers</div>
-                    <div className="text-2xl font-bold text-white">{data.length}</div>
-                  </div>
-                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                    <div className="text-xs text-gray-500 mb-1">Average Norm</div>
-                    <div className="text-2xl font-bold" style={{color:'#c9a96e'}}>{avgNorm.toFixed(2)}</div>
-                  </div>
-                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                    <div className="text-xs text-gray-500 mb-1">Max Norm</div>
-                    <div className="text-2xl font-bold text-green-400">{maxNorm.toFixed(2)}</div>
-                  </div>
-                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                    <div className="text-xs text-gray-500 mb-1">Min Norm</div>
-                    <div className="text-2xl font-bold text-blue-400">{minNorm.toFixed(2)}</div>
-                  </div>
+                {/* Summary stats */}
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { label: 'Total Layers', value: data.length, color: '#fff' },
+                    { label: 'Avg Norm', value: avgNorm.toFixed(1), color: '#c9a96e' },
+                    { label: 'Peak Norm', value: maxNorm.toFixed(1), color: '#86efac' } as const,
+                    { label: 'Max Drift', value: maxDelta.toFixed(1), color: '#f9a8d4' },
+                  ].map(s => (
+                    <div key={s.label} className="p-4 rounded-xl" style={{ backgroundColor: '#2a2a2a', border: '1px solid rgba(255,255,255,0.08)' }}>
+                      <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>{s.label}</div>
+                      <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.value}</div>
+                    </div>
+                  ))}
                 </div>
 
-                <div className="h-96">
+                <div className="text-xs" style={{ color: '#6b7280' }}>
+                  Click any bar to drill down into per-token activations at that layer.
+                  {selectedLayer !== null && <span className="ml-2" style={{ color: '#c9a96e' }}>Showing Layer {selectedLayer} ↓</span>}
+                </div>
+
+                {/* Main bar chart — clickable */}
+                <div className="h-72 rounded-xl p-4" style={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
-                      <XAxis
-                        dataKey="layer"
-                        stroke="#9ca3af"
-                        fontSize={12}
-                        tickLine={false}
-                        label={{ value: 'Layer', position: 'insideBottom', offset: -25, fill: '#9ca3af', fontSize: 13 }}
-                      />
-                      <YAxis
-                        stroke="#9ca3af"
-                        fontSize={12}
-                        tickLine={false}
-                        label={{
-                          value: 'Activation Norm',
-                          angle: -90,
-                          position: 'insideLeft',
-                          fill: '#9ca3af',
-                          fontSize: 13,
-                        }}
-                      />
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                    <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 20 }} onClick={(e: any) => {
+                      if (e?.activePayload?.[0]) {
+                        const layer = (e.activePayload[0].payload as HiddenStateNorm).layer
+                        setSelectedLayer((prev: number | null) => prev === layer ? null : layer)
+                      }
+                    }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis dataKey="layer" stroke="#4b5563" fontSize={11} tickLine={false} tick={{ fill: '#6b7280' }}
+                        label={{ value: 'Layer', position: 'insideBottom', offset: -12, fill: '#6b7280', fontSize: 12 }} />
+                      <YAxis stroke="#4b5563" fontSize={11} tickLine={false} tick={{ fill: '#6b7280' }} width={50} />
                       <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#1f2937',
-                          border: '1px solid #374151',
-                          borderRadius: '8px',
-                          fontSize: '13px',
-                        }}
-                        labelStyle={{ color: '#c9a96e', fontWeight: 'bold' }}
+                        contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#c9a96e' }}
                         itemStyle={{ color: '#fff' }}
-                        formatter={(value: number | undefined) => value?.toFixed(3) || '0'}
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        formatter={((v: number) => [v.toFixed(2), 'Norm']) as any}
+                        labelFormatter={(l) => `Layer ${l}`}
                       />
-                      <Bar dataKey="norm" fill="#c9a96e" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="norm" radius={[3, 3, 0, 0]} cursor="pointer">
+                        {data.map((d) => (
+                          <Cell
+                            key={d.layer}
+                            fill={selectedLayer === d.layer ? '#f9a8d4' : (d.delta ?? 0) > maxDelta * 0.6 ? '#86efac' : '#c9a96e'}
+                            opacity={selectedLayer !== null && selectedLayer !== d.layer ? 0.4 : 1}
+                          />
+                        ))}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
 
-                <div className="text-sm text-gray-400">
-                  <p className="mb-2">
-                    Hidden state norms represent the magnitude of activations at each layer. Higher values indicate
-                    stronger activations.
-                  </p>
-                  <p>The pattern shows how information flows and transforms through the model&apos;s layers during inference.</p>
+                {/* Drift overlay chart */}
+                {data.some(d => d.delta !== undefined) && (
+                  <div>
+                    <div className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Layer-to-layer drift (Δ norm)</div>
+                    <div className="h-24 rounded-xl px-4 pt-2" style={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={data.slice(1)} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                          <XAxis dataKey="layer" hide />
+                          <YAxis hide />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                            labelStyle={{ color: '#f9a8d4' }}
+                            itemStyle={{ color: '#fff' }}
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            formatter={((v: number) => [v.toFixed(2), 'Drift']) as any}
+                            labelFormatter={(l) => `Layer ${l}`}
+                          />
+                          <Bar dataKey="delta" radius={[2, 2, 0, 0]}>
+                            {data.slice(1).map((d) => (
+                              <Cell key={d.layer} fill={(d.delta ?? 0) > maxDelta * 0.6 ? '#86efac' : 'rgba(249,168,212,0.5)'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {/* Drill-down: per-token heatmap for selected layer */}
+                {selectedLayerData && tokenNorms.length > 0 && (
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(249,168,212,0.2)' }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-semibold" style={{ color: '#f9a8d4' }}>
+                        Layer {selectedLayer} — per-token activations
+                      </span>
+                      <span className="text-xs font-mono" style={{ color: '#6b7280' }}>
+                        mean norm: {selectedLayerData.norm.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {tokenNorms.map((norm, idx) => {
+                        const intensity = norm / maxTokenNorm
+                        const label = hiddenTokens[idx] ?? `t${idx}`
+                        const bg = `rgba(201,169,110,${0.1 + intensity * 0.75})`
+                        const textCol = intensity > 0.5 ? '#000' : '#fff'
+                        return (
+                          <div
+                            key={idx}
+                            className="rounded px-2 py-1 text-xs font-mono"
+                            style={{ backgroundColor: bg, color: textCol }}
+                            title={`${label}: ${norm.toFixed(3)}`}
+                          >
+                            {label.replace(/^▁/, ' ').trim() || '·'}
+                            <span className="ml-1 text-[9px] opacity-70">{norm.toFixed(1)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-xs" style={{ color: '#4b5563' }}>
+                  Green bars = high-drift layers where the model is doing the most computation.
+                  Pink = selected layer. Click again to deselect.
                 </div>
               </div>
             )

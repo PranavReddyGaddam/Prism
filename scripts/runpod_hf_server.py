@@ -179,14 +179,37 @@ def ex_hidden(body: ExplainBody):
     tok, model = _resolve(body)
     with _GEN_LOCK:
         inputs = _encode(tok, model, body.prompt)
+        input_ids = inputs["input_ids"][0]
+        tokens = [tok.decode([tid], skip_special_tokens=False) for tid in input_ids.tolist()]
+
         with torch.inference_mode():
             out = model(**inputs, output_hidden_states=True)
-        hidden_state_norms = [
-            {"layer": i, "norm": hs[0].float().norm(dim=-1).mean().item()}
-            for i, hs in enumerate(out.hidden_states)
-        ]
+
+        all_hs = out.hidden_states  # tuple of (1, seq_len, hidden_dim)
+        n_layers = len(all_hs)
+        seq_len = all_hs[0].shape[1]
+
+        hidden_state_norms = []
+        prev_mean = None
+        for i, hs in enumerate(all_hs):
+            norms_per_token = hs[0].float().norm(dim=-1).tolist()  # (seq_len,)
+            mean_norm = sum(norms_per_token) / len(norms_per_token)
+            delta = abs(mean_norm - prev_mean) if prev_mean is not None else 0.0
+            prev_mean = mean_norm
+            hidden_state_norms.append({
+                "layer": i,
+                "norm": mean_norm,
+                "delta": delta,
+                "token_norms": [round(v, 3) for v in norms_per_token],
+            })
+
         torch.cuda.empty_cache()
-    return {"hidden_state_norms": hidden_state_norms}
+    return {
+        "hidden_state_norms": hidden_state_norms,
+        "tokens": tokens,
+        "n_layers": n_layers,
+        "seq_len": seq_len,
+    }
 
 
 def _get_lm_head(model):

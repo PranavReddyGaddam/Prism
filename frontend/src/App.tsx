@@ -108,7 +108,7 @@ async function fetchModelSlot(
       }
     : null
 
-  return { status: 'ready', result, explain, graph, rawAttribution }
+  return { status: 'ready', result, explain, graph, rawAttribution, hiddenTokens: hiddenData?.tokens ?? [] }
 }
 
 function errorSlot(tab: (typeof COMPARISON_MODEL_TABS)[number], message: string): SlotState {

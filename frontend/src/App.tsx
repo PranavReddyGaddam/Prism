@@ -15,6 +15,7 @@ import {
   type LayerAttention,
 } from '@/lib/attributionGraph'
 import PostHocBento from '@/components/PostHocBento'
+import Presentation from '@/components/Presentation'
 import type {
   PostHocSlot,
   LimeResult,
@@ -587,6 +588,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/" element={<MainApp />} />
+        <Route path="/presentation" element={<Presentation />} />
       </Routes>
     </Router>
   )

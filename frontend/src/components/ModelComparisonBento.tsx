@@ -416,9 +416,10 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
               const modelId = result.model_id
               if (expandedCard === 'response') return (
                 <AITooltip card="response" modelId={modelId} data={{
+                  prompt: cleanMath(slot.rawAttribution?.prompt ?? '').slice(0, 200),
                   token_count: result.token_count,
                   final_answer: result.final_answer,
-                  response_preview: cleanMath(result.response ?? '').slice(0, 400),
+                  response_preview: cleanMath(result.response ?? '').slice(0, 600),
                 }} />
               )
               if (expandedCard === 'attribution' && explainData.attribution?.length) {

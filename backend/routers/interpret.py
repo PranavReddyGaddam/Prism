@@ -98,7 +98,7 @@ async def interpret(request: InterpretRequest):
                     {"role": "system", "content": CARD_SYSTEM},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=150,
+                max_tokens=200,
                 temperature=0.4,
                 stream=True,
             )

@@ -3,8 +3,22 @@ import AttributionGraphVisualization from '@/components/visualizations/Attributi
 import NodeDetailPanel from '@/components/visualizations/NodeDetailPanel'
 import TokenFlow from '@/components/visualizations/TokenFlow'
 import type { AttributionGraph, AttributionNode } from '@/types/attribution'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts'
 import { buildAttributionGraph, DEFAULT_MAX_LAYERS, DEFAULT_MAX_OUTPUTS } from '@/lib/attributionGraph'
+
+// Strip LaTeX delimiters and normalize math notation for plain-text display
+export function cleanMath(text: string): string {
+  return text
+    .replace(/\\\(|\\\)/g, '')           // remove \( \)
+    .replace(/\\\[|\\\]/g, '')           // remove \[ \]
+    .replace(/\\boxed\{([^}]*)\}/g, '[$1]')  // \boxed{x} → [x]
+    .replace(/\\\\/g, '')                // remove leftover \\
+    .replace(/\\_/g, '_')               // \_ → _
+    .replace(/\\text\{([^}]*)\}/g, '$1') // \text{x} → x
+    .replace(/\$\$([^$]+)\$\$/g, '$1')  // $$x$$ → x
+    .replace(/\$([^$]+)\$/g, '$1')      // $x$ → x
+    .trim()
+}
 
 export type SlotStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -111,7 +125,7 @@ export function ModelComparisonBento({ slot, onExpandCard }: ModelComparisonBent
           ) : result ? (
             <div className="p-4 rounded-lg flex-1 overflow-hidden border border-gray-700/40" style={{backgroundColor: '#2a2a2a'}}>
               <p className="text-gray-400 text-[10px] font-semibold uppercase tracking-wider mb-2">Final Answer</p>
-              <p className="text-white text-sm line-clamp-6">{result.final_answer || result.response}</p>
+              <p className="text-white text-sm line-clamp-6">{cleanMath(result.final_answer || result.response)}</p>
             </div>
           ) : null}
         </div>
@@ -520,6 +534,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                         label={{ value: 'Layer', position: 'insideBottom', offset: -12, fill: '#6b7280', fontSize: 12 }} />
                       <YAxis stroke="#4b5563" fontSize={11} tickLine={false} tick={{ fill: '#6b7280' }} width={50} />
                       <Tooltip
+                        cursor={{ fill: 'transparent' }}
                         contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
                         labelStyle={{ color: '#c9a96e' }}
                         itemStyle={{ color: '#fff' }}
@@ -528,6 +543,14 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                         labelFormatter={(l) => `Layer ${l}`}
                       />
                       <Bar dataKey="norm" radius={[3, 3, 0, 0]} cursor="pointer">
+                        <LabelList
+                          dataKey="norm"
+                          position="top"
+                          fontSize={9}
+                          fill="#9ca3af"
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          formatter={((v: number) => v >= 100 ? v.toFixed(0) : v.toFixed(1)) as any}
+                        />
                         {data.map((d) => (
                           <Cell
                             key={d.layer}
@@ -550,6 +573,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                           <XAxis dataKey="layer" hide />
                           <YAxis hide />
                           <Tooltip
+                            cursor={{ fill: 'transparent' }}
                             contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
                             labelStyle={{ color: '#f9a8d4' }}
                             itemStyle={{ color: '#fff' }}
@@ -634,7 +658,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                         <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Thinking</span>
                       </div>
                       <div className="px-4 py-3 max-h-48 overflow-y-auto" style={{backgroundColor:'#161616'}}>
-                        <p className="text-gray-400 text-sm leading-relaxed whitespace-pre-wrap">{result.thinking}</p>
+                        <p className="text-gray-400 text-sm leading-relaxed whitespace-pre-wrap">{cleanMath(result.thinking)}</p>
                       </div>
                     </div>
                   )}
@@ -643,7 +667,7 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Final Answer</span>
                     </div>
                     <div className="px-4 py-4" style={{backgroundColor:'#181818'}}>
-                      <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{result.final_answer || result.response}</p>
+                      <p className="text-white text-base leading-relaxed whitespace-pre-wrap">{cleanMath(result.final_answer || result.response)}</p>
                     </div>
                   </div>
                 </div>

@@ -7,6 +7,7 @@ import {
   ModelComparisonModal,
   type SlotState,
   type GenerationResult,
+  cleanMath,
 } from '@/components/ModelComparisonBento'
 import { COMPARISON_MODEL_TABS, type ComparisonModelId } from '@/modelSpecs'
 import {
@@ -364,7 +365,7 @@ function ComparisonTable({ slots }: ComparisonTableProps) {
                 {slot.status === 'idle' && <p className="text-xs" style={{ color: '#374151' }}>No data yet.</p>}
                 {slot.status === 'ready' && slot.result && (
                   <p className="text-xs leading-relaxed line-clamp-5" style={{ color: '#d1d5db' }}>
-                    {slot.result.final_answer || slot.result.response}
+                    {cleanMath(slot.result.final_answer || slot.result.response)}
                   </p>
                 )}
               </div>

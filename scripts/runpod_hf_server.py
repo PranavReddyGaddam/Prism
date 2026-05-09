@@ -134,7 +134,7 @@ def generate(body: GenerateBody):
             if "out of memory" in str(e).lower():
                 torch.cuda.empty_cache()
             raise HTTPException(status_code=503, detail=f"GPU inference failed: {e}") from e
-        text = tok.decode(out[0], skip_special_tokens=True)
+        text = _truncate_response(tok.decode(out[0], skip_special_tokens=True))
         torch.cuda.empty_cache()
     return {"model_id": body.model_id, "response": text}
 
@@ -392,12 +392,23 @@ def _short_generate(model, tok, prompt: str, max_new: int = 96) -> str:
             pad_token_id=pad,
         )
     full = tok.decode(out[0], skip_special_tokens=True)
-    # Strip echoed prompt
-    return full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
+    # Strip echoed prompt, then truncate any leaked next-problem text
+    text = full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
+    return _truncate_response(text)
 
 
 _PROMPT_PREFIX = "### Problem:\n"
 _PROMPT_SUFFIX = "\n### Solution:\n"
+# Markers that indicate the model has started generating a new problem — truncate here
+_STOP_PATTERNS = ["### Problem:", "### Solution:", "\n##"]
+
+def _truncate_response(text: str) -> str:
+    """Cut off any text where the model starts generating a new problem/prompt."""
+    for pat in _STOP_PATTERNS:
+        idx = text.find(pat)
+        if idx != -1:
+            text = text[:idx]
+    return text.strip()
 
 def _unwrap_prompt(prompt: str) -> str:
     """Strip ### Problem:/Solution: wrapper if present, returning raw problem text."""

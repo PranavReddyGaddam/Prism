@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import AITooltip from '@/components/AITooltip'
 import AttributionGraphVisualization from '@/components/visualizations/AttributionGraph'
 import NodeDetailPanel from '@/components/visualizations/NodeDetailPanel'
 import TokenFlow from '@/components/visualizations/TokenFlow'
@@ -404,12 +405,65 @@ export function ModelComparisonModal({ expandedCard, slot, onClose }: ExpandedMo
           className="flex items-center justify-between mb-4 transition-all duration-300 ease-out"
           style={{ opacity: mounted ? 1 : 0, transform: mounted ? 'translateY(0)' : 'translateY(-8px)' }}
         >
-          <h2 className="text-2xl font-bold text-white">
-            {expandedCard === 'response' && 'AI Response'}
-            {expandedCard === 'attribution' && 'Attribution Graph Analysis'}
-            {expandedCard === 'hidden' && 'Hidden State Analysis'}
-            {expandedCard === 'flow' && 'Token Generation Flow'}
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-2xl font-bold text-white">
+              {expandedCard === 'response' && 'AI Response'}
+              {expandedCard === 'attribution' && 'Attribution Graph Analysis'}
+              {expandedCard === 'hidden' && 'Hidden State Analysis'}
+              {expandedCard === 'flow' && 'Token Generation Flow'}
+            </h2>
+            {result && (() => {
+              const modelId = result.model_id
+              if (expandedCard === 'response') return (
+                <AITooltip card="response" modelId={modelId} data={{
+                  token_count: result.token_count,
+                  final_answer: result.final_answer,
+                  response_preview: cleanMath(result.response ?? '').slice(0, 400),
+                }} />
+              )
+              if (expandedCard === 'attribution' && explainData.attribution?.length) {
+                const sorted = [...explainData.attribution].sort((a,b) => Math.abs(b.score)-Math.abs(a.score))
+                return (
+                  <AITooltip card="attribution" modelId={modelId} data={{
+                    prompt: cleanMath(slot.rawAttribution?.prompt ?? '').slice(0, 200),
+                    top_tokens: sorted.slice(0, 8).map(t => ({ token: t.token.trim(), score: +t.score.toFixed(4) })),
+                    bottom_tokens: sorted.slice(-3).map(t => ({ token: t.token.trim(), score: +t.score.toFixed(4) })),
+                  }} />
+                )
+              }
+              if (expandedCard === 'hidden' && explainData.hiddenStates?.length) {
+                const hs = explainData.hiddenStates
+                const maxNorm = Math.max(...hs.map(h => h.norm))
+                const peakLayer = hs.find(h => h.norm === maxNorm)?.layer ?? 0
+                const maxDrift = Math.max(...hs.map(h => h.delta ?? 0))
+                const maxDriftLayer = hs.find(h => (h.delta ?? 0) === maxDrift)?.layer ?? 0
+                // Sample every 4th layer for the trend
+                const trend = hs.filter((_,i) => i % 4 === 0).map(h => ({ layer: h.layer, norm: +h.norm.toFixed(1) }))
+                return <AITooltip card="hidden" modelId={modelId} data={{
+                  layer_count: hs.length,
+                  avg_norm: +(hs.reduce((s,h)=>s+h.norm,0)/hs.length).toFixed(1),
+                  peak_norm: +maxNorm.toFixed(1), peak_layer: peakLayer,
+                  max_drift: +maxDrift.toFixed(1), max_drift_layer: maxDriftLayer,
+                  norm_trend: trend,
+                }} />
+              }
+              if (expandedCard === 'flow' && tokens.length > 0) {
+                // Pass lowest-confidence tokens so GPT can name them specifically
+                const sorted = [...tokens].sort((a,b) => a.confidence - b.confidence)
+                return (
+                  <AITooltip card="confidence" modelId={modelId} data={{
+                    token_count: tokens.length,
+                    avg_confidence: +(tokens.reduce((s,t)=>s+t.confidence,0)/tokens.length).toFixed(4),
+                    min_confidence: +Math.min(...tokens.map(t=>t.confidence)).toFixed(4),
+                    max_confidence: +Math.max(...tokens.map(t=>t.confidence)).toFixed(4),
+                    lowest_confidence_tokens: sorted.slice(0, 5).map(t => ({ token: t.token, confidence: +t.confidence.toFixed(3) })),
+                    highest_confidence_tokens: sorted.slice(-5).reverse().map(t => ({ token: t.token, confidence: +t.confidence.toFixed(3) })),
+                  }} />
+                )
+              }
+              return null
+            })()}
+          </div>
           <button
             type="button"
             onClick={handleClose}

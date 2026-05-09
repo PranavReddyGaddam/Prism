@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
 import type { PostHocSlot, LimeResult, TokenShapResult, CounterfactualResult } from '@/types/posthoc'
+import AITooltip from '@/components/AITooltip'
 
 const POS_COLOR = '#86efac'
 const NEG_COLOR = '#fca5a5'
@@ -212,12 +213,15 @@ interface PostHocBentoProps {
   slot: PostHocSlot
 }
 
-function Pane({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+function Pane({ title, subtitle, tooltip, children }: { title: string; subtitle: string; tooltip?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="rounded-xl p-4" style={{ backgroundColor: CARD_BG, border: BORDER }}>
-      <div className="flex items-baseline gap-3 mb-3">
-        <h3 className="text-white text-base font-semibold">{title}</h3>
-        <span className="text-gray-500 text-xs">{subtitle}</span>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-baseline gap-3">
+          <h3 className="text-white text-base font-semibold">{title}</h3>
+          <span className="text-gray-500 text-xs">{subtitle}</span>
+        </div>
+        {tooltip}
       </div>
       {children}
     </div>
@@ -275,7 +279,24 @@ export default function PostHocBento({ slot }: PostHocBentoProps) {
       </div>
 
       {slot.lime ? (
-        <Pane title="LIME" subtitle="Word-level attribution from local linear surrogate">
+        <Pane
+          title="LIME"
+          subtitle="Word-level attribution from local linear surrogate"
+          tooltip={(() => {
+            const d = slot.lime!
+            const sorted = d.words.map((w, i) => ({ word: w, score: d.attributions[i] ?? 0 }))
+              .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+            return (
+              <AITooltip card="lime" modelId={slot.model_id ?? ''} data={{
+                reference_answer: d.reference_answer,
+                r_squared: +d.r_squared.toFixed(3),
+                n_samples: d.n_samples,
+                top_words: sorted.slice(0, 6).map(x => ({ word: x.word, score: +x.score.toFixed(4) })),
+                bottom_words: sorted.slice(-3).map(x => ({ word: x.word, score: +x.score.toFixed(4) })),
+              }} />
+            )
+          })()}
+        >
           <LimeCard data={slot.lime} />
         </Pane>
       ) : (
@@ -283,7 +304,23 @@ export default function PostHocBento({ slot }: PostHocBentoProps) {
       )}
 
       {slot.tokenshap ? (
-        <Pane title="TokenSHAP" subtitle="Shapley-value attribution from token coalitions">
+        <Pane
+          title="TokenSHAP"
+          subtitle="Shapley-value attribution from token coalitions"
+          tooltip={(() => {
+            const d = slot.tokenshap!
+            const sorted = d.words.map((w, i) => ({ word: w, score: d.attributions[i] ?? 0 }))
+              .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+            return (
+              <AITooltip card="tokenshap" modelId={slot.model_id ?? ''} data={{
+                reference_answer: d.reference_answer,
+                n_samples: d.n_samples,
+                top_words: sorted.slice(0, 6).map(x => ({ word: x.word, score: +x.score.toFixed(4) })),
+                bottom_words: sorted.slice(-3).map(x => ({ word: x.word, score: +x.score.toFixed(4) })),
+              }} />
+            )
+          })()}
+        >
           <TokenShapCard data={slot.tokenshap} />
         </Pane>
       ) : (

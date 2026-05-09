@@ -46,4 +46,5 @@ export interface PostHocSlot {
   tokenshap: TokenShapResult | null
   counterfactual: CounterfactualResult | null
   error?: string
+  model_id?: string
 }

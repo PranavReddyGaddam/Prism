@@ -1,4 +1,4 @@
-import os
+import re
 
 MODEL_CONFIGS = {
     "qwen-2.5-math-7b": {
@@ -37,8 +37,6 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
     import asyncio
     from remote_model_client import get_model_response
 
-    import re
-
     result = asyncio.run(get_model_response(model_id, prompt, max_new_tokens))
     full_response = result.get("response", "")
 
@@ -56,17 +54,17 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
     steps = [s.strip() for s in step_pattern.findall(body) if s.strip()]
     thinking = "\n\n".join(steps) if steps else None
 
-    # Extract final answer — prefer \boxed{}, then answer phrases, then last number in tail
-    _boxed_re = re.compile(r"\\boxed\s*\{\s*([+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+    # Extract final answer — prefer \boxed{} full content, then answer phrases, then last number in tail
+    _boxed_full_re = re.compile(r"\\boxed\s*\{([^}]+)\}", re.IGNORECASE)
     _phrase_re = re.compile(
         r"(?:answer(?:\s+is)?|therefore|thus|so|=)\s*([+-]?\d+(?:\.\d+)?)\s*[.\n]?\s*$",
         re.IGNORECASE,
     )
     _num_re = re.compile(r"[+-]?\d+(?:\.\d+)?")
 
-    m = _boxed_re.search(body)
+    m = _boxed_full_re.search(body)
     if m:
-        final_answer = m.group(1)
+        final_answer = m.group(1).strip()
     else:
         m = _phrase_re.search(body)
         if m:

@@ -48,22 +48,33 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
     else:
         body = full_response.strip()
 
-    # Extract numbered steps (Step 1:, Step 2:, 1., 2., etc.)
+    # Extract numbered steps for thinking display
     step_pattern = re.compile(
         r'(?:Step\s+\d+[:\.]|^\d+[\.\)])\s*.+?(?=(?:Step\s+\d+[:\.]|^\d+[\.\)])|$)',
         re.DOTALL | re.MULTILINE | re.IGNORECASE
     )
     steps = [s.strip() for s in step_pattern.findall(body) if s.strip()]
+    thinking = "\n\n".join(steps) if steps else None
 
-    # thinking = all steps joined; final_answer = last paragraph or last step
-    if steps:
-        thinking = "\n\n".join(steps)
-        # Final answer is the last sentence/paragraph after the last step
-        after_steps = body[body.rfind(steps[-1]) + len(steps[-1]):].strip()
-        final_answer = after_steps if after_steps else steps[-1]
+    # Extract final answer — prefer \boxed{}, then answer phrases, then last number in tail
+    _boxed_re = re.compile(r"\\boxed\s*\{\s*([+-]?\d+(?:\.\d+)?)", re.IGNORECASE)
+    _phrase_re = re.compile(
+        r"(?:answer(?:\s+is)?|therefore|thus|so|=)\s*([+-]?\d+(?:\.\d+)?)\s*[.\n]?\s*$",
+        re.IGNORECASE,
+    )
+    _num_re = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+    m = _boxed_re.search(body)
+    if m:
+        final_answer = m.group(1)
     else:
-        thinking = None
-        final_answer = body
+        m = _phrase_re.search(body)
+        if m:
+            final_answer = m.group(1)
+        else:
+            tail = body[-80:]
+            nums = _num_re.findall(tail)
+            final_answer = nums[-1] if nums else body
 
     return {
         "response": full_response,

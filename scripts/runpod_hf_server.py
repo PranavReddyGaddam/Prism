@@ -134,7 +134,10 @@ def generate(body: GenerateBody):
             if "out of memory" in str(e).lower():
                 torch.cuda.empty_cache()
             raise HTTPException(status_code=503, detail=f"GPU inference failed: {e}") from e
-        text = _truncate_response(tok.decode(out[0], skip_special_tokens=True))
+        # Decode only the newly generated tokens (slice off the prompt input tokens)
+        n_input = inputs["input_ids"].shape[-1]
+        generated_ids = out[0][n_input:]
+        text = _truncate_response(tok.decode(generated_ids, skip_special_tokens=True))
         torch.cuda.empty_cache()
     return {"model_id": body.model_id, "response": text}
 

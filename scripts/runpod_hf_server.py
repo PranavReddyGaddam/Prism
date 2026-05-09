@@ -380,7 +380,7 @@ def _extract_final_answer(text: str) -> Optional[str]:
     return nums[-1] if nums else None
 
 
-def _short_generate(model, tok, prompt: str, max_new: int = 96) -> str:
+def _short_generate(model, tok, prompt: str, max_new: int = 192) -> str:
     pad = tok.pad_token_id or tok.eos_token_id
     inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=1024)
     inputs = {
@@ -650,7 +650,7 @@ def posthoc_counterfactual(body: PostHocBody):
     loaded). This keeps total forward passes per model bounded and predictable.
     """
     tok, model = _resolve_model(body.model_id)
-    max_new = min(int(body.max_new_tokens or 48), 64)
+    max_new = min(int(body.max_new_tokens or 192), 256)
 
     spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
     if not spans:

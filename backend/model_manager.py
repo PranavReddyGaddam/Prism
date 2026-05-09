@@ -1,4 +1,3 @@
-import re
 
 MODEL_CONFIGS = {
     "qwen-2.5-math-7b": {
@@ -46,37 +45,9 @@ def run_inference(model_id: str, prompt: str, max_new_tokens: int = 512) -> dict
     else:
         body = full_response.strip()
 
-    # Extract numbered steps for thinking display
-    step_pattern = re.compile(
-        r'(?:Step\s+\d+[:\.]|^\d+[\.\)])\s*.+?(?=(?:Step\s+\d+[:\.]|^\d+[\.\)])|$)',
-        re.DOTALL | re.MULTILINE | re.IGNORECASE
-    )
-    steps = [s.strip() for s in step_pattern.findall(body) if s.strip()]
-    thinking = "\n\n".join(steps) if steps else None
-
-    # Extract final answer — prefer \boxed{} full content, then answer phrases, then last number in tail
-    _boxed_full_re = re.compile(r"\\boxed\s*\{([^}]+)\}", re.IGNORECASE)
-    _phrase_re = re.compile(
-        r"(?:answer(?:\s+is)?|therefore|thus|so|=)\s*([+-]?\d+(?:\.\d+)?)\s*[.\n]?\s*$",
-        re.IGNORECASE,
-    )
-    _num_re = re.compile(r"[+-]?\d+(?:\.\d+)?")
-
-    m = _boxed_full_re.search(body)
-    if m:
-        final_answer = m.group(1).strip()
-    else:
-        m = _phrase_re.search(body)
-        if m:
-            final_answer = m.group(1)
-        else:
-            tail = body[-80:]
-            nums = _num_re.findall(tail)
-            final_answer = nums[-1] if nums else body
-
     return {
         "response": full_response,
-        "thinking": thinking,
-        "final_answer": final_answer,
+        "thinking": body,
+        "final_answer": body,
         "token_count": len(full_response) // 4,
     }

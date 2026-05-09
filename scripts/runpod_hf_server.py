@@ -118,7 +118,7 @@ def generate(body: GenerateBody):
 
     with _GEN_LOCK:
         tok, model = _load(path, _trust(trust_env))
-        max_new = min(int(body.max_new_tokens or 512), 512)
+        max_new = min(int(body.max_new_tokens or 2000), 2000)
         pad = tok.pad_token_id or tok.eos_token_id
         inputs = tok(body.prompt, return_tensors="pt")
         inputs = {k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device) for k, v in inputs.items()}
@@ -127,6 +127,7 @@ def generate(body: GenerateBody):
                 out = model.generate(
                     **inputs,
                     max_new_tokens=max_new,
+                    min_new_tokens=64,
                     do_sample=False,
                     pad_token_id=pad,
                 )
@@ -380,7 +381,7 @@ def _extract_final_answer(text: str) -> Optional[str]:
     return nums[-1] if nums else None
 
 
-def _short_generate(model, tok, prompt: str, max_new: int = 192) -> str:
+def _short_generate(model, tok, prompt: str, max_new: int = 2000) -> str:
     pad = tok.pad_token_id or tok.eos_token_id
     inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=1024)
     inputs = {
@@ -391,6 +392,7 @@ def _short_generate(model, tok, prompt: str, max_new: int = 192) -> str:
         out = model.generate(
             **inputs,
             max_new_tokens=max_new,
+            min_new_tokens=64,
             do_sample=False,
             pad_token_id=pad,
         )
@@ -473,7 +475,7 @@ def posthoc_lime(body: PostHocBody):
     """
     tok, model = _resolve_model(body.model_id)
     n_samples = max(6, min(int(body.n_samples or 16), 24))
-    max_new = min(int(body.max_new_tokens or 96), 128)
+    max_new = min(int(body.max_new_tokens or 2000), 2000)
 
     raw_problem = _unwrap_prompt(body.prompt)
     words = raw_problem.split()
@@ -556,7 +558,7 @@ def posthoc_tokenshap(body: PostHocBody):
     """
     tok, model = _resolve_model(body.model_id)
     n_samples = max(6, min(int(body.n_samples or 16), 24))
-    max_new = min(int(body.max_new_tokens or 96), 128)
+    max_new = min(int(body.max_new_tokens or 2000), 2000)
 
     raw_problem = _unwrap_prompt(body.prompt)
     words = raw_problem.split()
@@ -650,7 +652,7 @@ def posthoc_counterfactual(body: PostHocBody):
     loaded). This keeps total forward passes per model bounded and predictable.
     """
     tok, model = _resolve_model(body.model_id)
-    max_new = min(int(body.max_new_tokens or 384), 512)
+    max_new = min(int(body.max_new_tokens or 2000), 2000)
 
     spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
     if not spans:

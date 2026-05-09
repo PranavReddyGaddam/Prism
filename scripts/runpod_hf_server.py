@@ -118,7 +118,7 @@ def generate(body: GenerateBody):
 
     with _GEN_LOCK:
         tok, model = _load(path, _trust(trust_env))
-        max_new = min(int(body.max_new_tokens or 256), 256)
+        max_new = min(int(body.max_new_tokens or 512), 512)
         pad = tok.pad_token_id or tok.eos_token_id
         inputs = tok(body.prompt, return_tensors="pt")
         inputs = {k: v.to(device=model.device, dtype=model.dtype) if v.is_floating_point() else v.to(model.device) for k, v in inputs.items()}
@@ -650,7 +650,7 @@ def posthoc_counterfactual(body: PostHocBody):
     loaded). This keeps total forward passes per model bounded and predictable.
     """
     tok, model = _resolve_model(body.model_id)
-    max_new = min(int(body.max_new_tokens or 192), 256)
+    max_new = min(int(body.max_new_tokens or 384), 512)
 
     spans = [(m.start(), m.end(), m.group(0)) for m in _ANY_NUMBER_RE.finditer(body.prompt)]
     if not spans:

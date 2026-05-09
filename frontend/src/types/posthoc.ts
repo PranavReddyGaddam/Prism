@@ -47,4 +47,5 @@ export interface PostHocSlot {
   counterfactual: CounterfactualResult | null
   error?: string
   model_id?: string
+  prompt?: string
 }

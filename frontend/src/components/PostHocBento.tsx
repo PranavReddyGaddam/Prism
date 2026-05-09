@@ -195,11 +195,15 @@ function CounterfactualModal({
   edit,
   referenceResponse,
   referenceAnswer,
+  modelId,
+  prompt,
   onClose,
 }: {
   edit: CounterfactualEdit
   referenceResponse: string
   referenceAnswer: string | null
+  modelId: string
+  prompt: string
   onClose: () => void
 }) {
   const diff = useMemo(() => diffSentences(referenceResponse, edit.new_response), [referenceResponse, edit.new_response])
@@ -236,6 +240,15 @@ function CounterfactualModal({
               <span className="mx-1 text-gray-600">→</span>
               <span className="text-emerald-300 font-mono">{edit.new_answer ?? '?'}</span>
             </span>
+            <AITooltip card="counterfactual" modelId={modelId} data={{
+              prompt: prompt.slice(0, 200),
+              original_token: edit.original_token,
+              replacement: edit.replacement,
+              reference_answer: referenceAnswer,
+              new_answer: edit.new_answer,
+              original_response: referenceResponse.slice(0, 400),
+              new_response: edit.new_response.slice(0, 400),
+            }} />
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-white transition-colors p-1.5 hover:bg-gray-800 rounded-lg"
@@ -296,7 +309,7 @@ function CounterfactualModal({
 
 // ── Counterfactual card ──────────────────────────────────────────────────────
 
-function CounterfactualCard({ data }: { data: CounterfactualResult }) {
+function CounterfactualCard({ data, modelId, prompt }: { data: CounterfactualResult; modelId: string; prompt: string }) {
   const [selectedEdit, setSelectedEdit] = useState<CounterfactualEdit | null>(null)
 
   if (data.note && data.edits.length === 0) {
@@ -316,6 +329,8 @@ function CounterfactualCard({ data }: { data: CounterfactualResult }) {
           edit={selectedEdit}
           referenceResponse={data.reference_response}
           referenceAnswer={data.reference_answer}
+          modelId={modelId}
+          prompt={prompt}
           onClose={() => setSelectedEdit(null)}
         />
       )}
@@ -461,7 +476,7 @@ export default function PostHocBento({ slot }: PostHocBentoProps) {
             title="Counterfactual Edits"
             subtitle="Smallest input changes that flip the model's answer"
           >
-            <CounterfactualCard data={slot.counterfactual} />
+            <CounterfactualCard data={slot.counterfactual} modelId={slot.model_id ?? ''} prompt={slot.prompt ?? ''} />
           </Pane>
         ) : (
           <LoadingPane

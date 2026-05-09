@@ -505,7 +505,7 @@ function MainApp() {
 
     setPostHocSlots((prev) => ({
       ...prev,
-      [modelId]: { ...prev[modelId], status: 'loading', model_id: modelId },
+      [modelId]: { ...prev[modelId], status: 'loading', model_id: modelId, prompt: lastPrompt },
     }))
 
     const referenceResponse = slot.result.final_answer || slot.result.response

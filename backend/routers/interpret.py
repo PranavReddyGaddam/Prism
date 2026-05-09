@@ -65,6 +65,12 @@ Shapley values measure each word's average marginal contribution to the model's 
 - Highest Shapley value words (word, score): {d.get('top_words', [])}
 - Lowest Shapley value words: {d.get('bottom_words', [])}
 In 2-3 sentences, interpret what these Shapley values reveal — which words were truly necessary for the model to reach its answer, and how does this compare to what a human would consider the key information in the problem?""",
+
+    "counterfactual": lambda d: f"""Counterfactual analysis for model '{d.get('model_id')}' on this math problem: "{d.get('prompt', 'unknown')}"
+A single token was changed in the input — '{d.get('original_token')}' was replaced with '{d.get('replacement')}' — and the model's answer flipped from '{d.get('reference_answer')}' to '{d.get('new_answer')}'.
+Original response: "{d.get('original_response', '')}"
+Counterfactual response: "{d.get('new_response', '')}"
+In 2-3 sentences, explain what this flip reveals about the model's reasoning: was the model's original answer fragile or robust, does the changed token represent a genuinely important quantity in the problem, and what does this tell us about how sensitive the model is to this type of input perturbation?""",
 }
 
 
